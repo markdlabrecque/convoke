@@ -1,0 +1,8 @@
+{
+  "name": "convoke-sandcastle-tools",
+  "private": true,
+  "devDependencies": {
+    "@ai-hero/sandcastle": "0.14.0",
+    "tsx": "4.21.0"
+  }
+}

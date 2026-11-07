@@ -1,0 +1,777 @@
+<!doctype html>
+<!-- Shared board/evidence shell: sticky navigation, a slide-in Settings panel (design: Ship's Log, Tide Chart, Castle Row,
+     Treasure Map; mode: light/dark/system, both saved in the browser) and same-tab evidence previews.
+     board.mts strips the sandcastle-refresh meta from evidence pages; the board reloads every 10s unless Settings is open. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="sandcastle-refresh" content="10">
+<title>Sandcastle Board</title>
+<script>
+(function () {
+  var root = document.documentElement, mode, design;
+  try { mode = localStorage.getItem('sandcastle-theme'); design = localStorage.getItem('sandcastle-design'); } catch (_) {}
+  if (['light', 'dark', 'system'].indexOf(mode) < 0) mode = 'system';
+  if (['log', 'tide', 'castle', 'map'].indexOf(design) < 0) design = 'log';
+  root.dataset.mode = mode;
+  root.dataset.design = design;
+  root.dataset.theme = mode === 'system' ? (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,800;1,9..144,400;1,9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ---------- design tokens: one block per design and mode ---------- */
+  :root, :root[data-design="log"] {
+    --bg: #f6efe0; --nav: #f6efe0; --ink: #1d2a3a; --soft: #6a6a62; --line: #d9cdb2; --card: #fbf6ea;
+    --accent: #1d4e74; --hot: #b8322a; --ok: #2f7a4a; --on: #fff;
+    --font-head: Fraunces, Georgia, serif; --font-body: "IBM Plex Sans", system-ui, sans-serif; --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+    --radius: 4px;
+  }
+  :root[data-design="log"][data-theme="dark"] {
+    --bg: #0d1420; --nav: #0d1420; --ink: #f2c98a; --soft: #9a8b70; --line: #283447; --card: #121b2a;
+    --accent: #ffb547; --hot: #ff7b5c; --ok: #8fd18a; --on: #0d1420;
+  }
+  :root[data-design="tide"] {
+    --bg: #fbf5e6; --nav: #fbf5e6; --ink: #0f3b45; --soft: #4f6f74; --line: #d9cba6; --card: #fffdf6;
+    --accent: #0e8a9c; --hot: #e2553f; --ok: #2e8a57; --on: #fff;
+    --c0: #f3e3b8; --c6: #2f9fb0; --glow: transparent; --wave1: #9fd6d9; --wave2: #5fb8c2;
+    --font-head: "Space Grotesk", system-ui, sans-serif; --font-body: "Space Grotesk", system-ui, sans-serif; --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+    --radius: 12px;
+  }
+  :root[data-design="tide"][data-theme="dark"] {
+    --bg: #04121c; --nav: #04121c; --ink: #d8f6f7; --soft: #82a9b3; --line: #17475a; --card: #0b2433;
+    --accent: #3ee6e0; --hot: #ff7a66; --ok: #5fe39a; --on: #04121c;
+    --c0: #0a2232; --c6: #052b3d; --glow: rgba(62,230,224,.35); --wave1: #0c3346; --wave2: #0f4a5f;
+  }
+  :root[data-design="castle"] {
+    --bg: #f2d79c; --nav: rgba(255,251,240,.85); --ink: #3d2a17; --soft: #7b6142; --line: #e6cf9c; --card: #fffbf0;
+    --accent: #2f8ea3; --hot: #e2553f; --ok: #3c9a5b; --on: #fff;
+    --sky1: #8fd3f4; --sky2: #fdf1d0; --sand2: #e0bb72; --wall: #f6e2b0; --wall2: #c99a4e; --win: #6b4b2a; --flag: #e2553f; --sea: #4fb3c6; --sun: #ffd166;
+    --font-head: "Baloo 2", system-ui, sans-serif; --font-body: Nunito, system-ui, sans-serif; --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+    --radius: 22px;
+  }
+  :root[data-design="castle"][data-theme="dark"] {
+    --bg: #3b3651; --nav: rgba(20,24,48,.85); --ink: #f3ecff; --soft: #b4abd0; --line: #3e3960; --card: #1d1b33;
+    --accent: #7fc8ff; --hot: #ff8a73; --ok: #6fe0a0; --on: #1d1b33;
+    --sky1: #0b1530; --sky2: #23315a; --sand2: #2c2840; --wall: #5a5476; --wall2: #3a3553; --win: #ffd36b; --flag: #ff8a73; --sea: #2c4d7a; --sun: #f4f1dc;
+  }
+  :root[data-design="map"] {
+    --bg: #f1dfb6; --nav: #faf0d2; --ink: #4a3320; --soft: #7a6244; --line: #c9a45c; --card: #faf0d2;
+    --accent: #2a7f8e; --hot: #c0392b; --ok: #3b7a4a; --on: #fff;
+    --sea-soft: #cfe6e6; --sand-deep: #e3c98f;
+    --font-head: ui-rounded, "Avenir Next", system-ui, sans-serif; --font-body: ui-rounded, "Avenir Next", system-ui, sans-serif; --font-mono: ui-monospace, Menlo, monospace;
+    --radius: 10px;
+  }
+  :root[data-design="map"][data-theme="dark"] {
+    --bg: #1c2733; --nav: #2a3a4f; --ink: #f1e7cf; --soft: #b9ad94; --line: #6d7f98; --card: #2a3a4f;
+    --accent: #5db7c4; --hot: #ef6a58; --ok: #6cc17f; --on: #fff;
+    --sea-soft: #1d3a44; --sand-deep: #26354a;
+  }
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  /* ---------- shell ---------- */
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: var(--bg); font: 15px/1.45 var(--font-body); min-height: 100vh; }
+  :root[data-design="log"] body { background-image: repeating-linear-gradient(180deg, transparent 0 31px, color-mix(in srgb, var(--line) 45%, transparent) 31px 32px); }
+  :root[data-design="log"][data-theme="dark"] body { background-image: radial-gradient(ellipse at 50% -10%, rgba(255,181,71,.10), transparent 60%), repeating-linear-gradient(180deg, transparent 0 31px, color-mix(in srgb, var(--line) 45%, transparent) 31px 32px); }
+  :root[data-design="castle"] body { background: linear-gradient(180deg, var(--sky1) 0, var(--sky2) 300px, var(--bg) 300px); }
+  :root[data-design="map"] body { background: radial-gradient(circle at 12% 18%, var(--sand-deep) 0 2px, transparent 3px) 0 0 / 46px 46px, radial-gradient(circle at 70% 60%, var(--sand-deep) 0 1.5px, transparent 2.5px) 0 0 / 61px 61px, var(--bg); }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible + .opt { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .app-nav { position: sticky; top: 0; z-index: 20; background: var(--nav); border-bottom: 1px solid var(--line); padding: 8px 16px; backdrop-filter: blur(6px); }
+  .nav-inner { max-width: 1400px; margin: auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .app-nav a { font-weight: 700; text-decoration: none; }
+  .app-nav a:hover { text-decoration: underline; }
+  .app-nav [aria-current="page"] { color: var(--ink); }
+  .icon-btn { display: grid; place-items: center; width: 44px; height: 44px; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .icon-btn:hover { border-color: var(--accent); }
+  .icon-btn svg { width: 22px; height: 22px; }
+  #settings-open { margin-left: auto; }
+  #app { max-width: 1400px; margin: 0 auto; padding: 0 16px 64px; }
+  .empty-board { padding: 40px 0; color: var(--soft); font-style: italic; }
+  .site-foot { margin-top: 28px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--soft); }
+
+  /* ---------- settings panel ---------- */
+  .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+  .settings { position: fixed; z-index: 50; top: 0; right: 0; bottom: 0; width: min(380px, 100vw); background: var(--card); color: var(--ink); border-left: 1px solid var(--line);
+    box-shadow: -18px 0 40px rgba(0,0,0,.18); transform: translateX(105%); visibility: hidden; transition: transform .32s cubic-bezier(.2,.8,.2,1), visibility 0s linear .32s;
+    display: flex; flex-direction: column; overflow-y: auto; font-family: var(--font-body); }
+  .settings-open .scrim { opacity: 1; pointer-events: auto; }
+  .settings-open .settings { transform: none; visibility: visible; transition: transform .32s cubic-bezier(.2,.8,.2,1), visibility 0s; }
+  .settings-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+  .settings-head h2 { margin: 0; font: 700 20px/1.2 var(--font-head); }
+  .settings fieldset { position: relative; border: 0; margin: 0; padding: 18px 20px 6px; min-width: 0; }
+  .settings legend { float: left; width: 100%; padding: 0; margin-bottom: 10px; font: 600 11px/1 var(--font-mono); letter-spacing: 1.4px; text-transform: uppercase; color: var(--soft); }
+  .settings input { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+  .designs { clear: both; display: grid; gap: 10px; }
+  .designs .opt { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; transition: border-color .15s, background .15s; }
+  .designs .opt:hover { border-color: var(--soft); }
+  .designs input:checked + .opt { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .opt b { display: block; font-size: 14px; }
+  .opt small { display: block; color: var(--soft); font-size: 12px; line-height: 1.35; }
+  .sw { width: 56px; height: 42px; border-radius: 8px; border: 1px solid rgba(0,0,0,.12); }
+  .sw-log { background: linear-gradient(180deg, #f6efe0 0 50%, #0d1420 50%); box-shadow: inset 6px 0 0 #b8322a; }
+  .sw-tide { background: linear-gradient(90deg, #f3e3b8, #8cc8c8, #2f9fb0 60%, #04121c 60%); }
+  .sw-castle { background: linear-gradient(180deg, #8fd3f4 0 45%, #f2d79c 45% 72%, #23315a 72%); }
+  .sw-map { background: radial-gradient(circle at 70% 40%, #c0392b 0 4px, transparent 5px), linear-gradient(135deg, #f1dfb6 0 55%, #2a3a4f 55%); }
+  .modes { clear: both; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1.5px solid var(--line); border-radius: 12px; padding: 4px; gap: 4px; }
+  .modes .opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background .15s, color .15s; }
+  .modes .opt svg { width: 20px; height: 20px; }
+  .modes input:checked + .opt { background: var(--accent); color: var(--on); }
+  .settings-note { padding: 8px 20px 20px; font-size: 12px; color: var(--soft); }
+  @media (prefers-reduced-motion: reduce) { .settings, .settings-open .settings, .scrim { transition: none; } }
+
+  /* ---------- shared pieces ---------- */
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; margin: 6px 4px 0 0; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--ink); }
+  .badge.pass { background: var(--ok); color: var(--on); }
+  .badge.fail, .badge.warn { background: var(--hot); color: var(--on); }
+  .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; font-weight: 700; }
+  .links a { color: var(--accent); }
+  .pulse { animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+
+  /* ---------- evidence (all designs) ---------- */
+  .ev-head { padding: 28px 0 8px; display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  .ev-head h1 { margin: 0; font: 800 34px/1.05 var(--font-head); }
+  .ev-head .sub { color: var(--soft); }
+  .ev-head .state { margin-left: auto; font: 600 12px/1 var(--font-mono); letter-spacing: 1px; text-transform: uppercase; color: var(--soft); }
+  .ev-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; overflow-wrap: anywhere; }
+  .ev-summary { margin-bottom: 16px; }
+  .ev-summary p { margin: 8px 0 0; }
+  .ev-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+  .ev-card h2 { margin: 0 0 10px; font: 700 15px/1.3 var(--font-head); }
+  .ev-card img, .ev-card video { display: block; width: 100%; max-height: 65vh; object-fit: contain; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: calc(var(--radius) / 2); }
+  .ev-card pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--font-mono); max-height: 65vh; overflow: auto; margin: 0; }
+  .ev-card .sub { color: var(--soft); font-size: 12px; }
+  :root[data-design="log"] .ev-head { border-bottom: 4px double var(--ink); }
+  :root[data-design="log"] .ev-head h1 { font-weight: 600; }
+  :root[data-design="log"] .ev-card.ev-summary { border-top: 0; padding-top: 0; }
+  :root[data-design="log"] .ev-card { background: transparent; border-width: 1px 0 0; border-color: var(--ink); border-radius: 0; padding: 14px 0; }
+  :root[data-design="tide"] .ev-card { box-shadow: 0 0 22px var(--glow); }
+  :root[data-design="castle"] .ev-card { border-width: 2px; box-shadow: 0 6px 0 var(--sand2); }
+  :root[data-design="castle"] .ev-head { border: 0; }
+  :root[data-design="map"] .ev-card { border-width: 2px; box-shadow: 0 2px 0 var(--line); }
+
+  /* ---------- Ship's Log ---------- */
+  .d-log .mast { padding-top: 24px; border-bottom: 4px double var(--ink); padding-bottom: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 16px; }
+  .d-log .mast .l, .d-log .mast .r { font: 500 12px/1.5 var(--font-mono); text-transform: uppercase; letter-spacing: 1.5px; color: var(--soft); }
+  .d-log .mast .r { text-align: right; }
+  .d-log h1 { margin: 0; font: 800 58px/.95 var(--font-head); letter-spacing: -1.5px; text-align: center; }
+  .d-log h1 em { font-weight: 400; color: var(--hot); }
+  .d-log .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--ink); }
+  .d-log .stat { padding: 14px 18px; border-right: 1px solid var(--line); }
+  .d-log .stat:last-child { border-right: 0; }
+  .d-log .stat b { display: block; font: 600 50px/1 var(--font-head); }
+  .d-log .stat span, .d-log section h2 small { font: 500 11px/1 var(--font-mono); text-transform: uppercase; letter-spacing: 1.5px; color: var(--soft); }
+  .d-log .stat.red b { color: var(--hot); }
+  .d-log section { margin-top: 32px; }
+  .d-log section h2 { font: italic 600 26px/1 var(--font-head); margin: 0 0 6px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .d-log section h2 small { font-style: normal; }
+  .d-log .entry { display: grid; grid-template-columns: 100px minmax(0, 1fr) minmax(0, 360px); gap: 22px; padding: 16px 0; border-top: 1px solid var(--line); align-items: center; }
+  .d-log .entry:first-of-type { border-top-color: var(--ink); }
+  .d-log .num { font: 400 38px/1 var(--font-head); color: var(--accent); }
+  .d-log .num a { color: inherit; text-decoration: none; }
+  .d-log .num a:hover { text-decoration: underline; }
+  .d-log .num small { display: block; font: 500 10.5px/1.2 var(--font-mono); color: var(--soft); letter-spacing: 1px; margin-top: 6px; text-transform: uppercase; overflow-wrap: anywhere; }
+  .d-log .entry.stale .num { color: var(--hot); }
+  .d-log .ttl { font: 600 20px/1.2 var(--font-head); overflow-wrap: anywhere; }
+  .d-log .meta { font: 400 12px/1.5 var(--font-mono); color: var(--soft); margin-top: 4px; overflow-wrap: anywhere; }
+  .d-log .note { margin-top: 6px; font-style: italic; }
+  .d-log .stamp { display: inline-block; margin: 8px 8px 0 0; font: 600 11px/1 var(--font-mono); letter-spacing: 1.5px; text-transform: uppercase; padding: 5px 8px; border: 2px solid currentColor; transform: rotate(-2deg); }
+  .d-log .stamp.pass { color: var(--ok); }
+  .d-log .stamp.fail, .d-log .stamp.quiet { color: var(--hot); }
+  .d-log .links { font: 500 12px/1 var(--font-mono); }
+  .d-log .rope svg { width: 100%; height: 46px; display: block; overflow: visible; }
+  .d-log .rope .lab { display: flex; justify-content: space-between; font: 500 10px/1 var(--font-mono); color: var(--soft); text-transform: uppercase; letter-spacing: .8px; }
+  .d-log .rope .now { font-size: 12.5px; font-weight: 600; margin-top: 6px; }
+  .d-log .rope .now em { color: var(--soft); font-style: normal; font-weight: 400; }
+  .d-log .knot-now { animation: knot 1.8s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes knot { 50% { transform: scale(1.35); opacity: .6; } }
+  @media (prefers-reduced-motion: reduce) { .d-log .knot-now { animation: none; } }
+  .d-log .site-foot { border-top: 4px double var(--ink); padding-top: 10px; font: 500 11px/1.5 var(--font-mono); text-transform: uppercase; letter-spacing: 1.2px; }
+  @media (max-width: 860px) {
+    .d-log .entry { grid-template-columns: 64px minmax(0, 1fr); }
+    .d-log .num { font-size: 26px; }
+    .d-log .rope { grid-column: 1 / -1; }
+    .d-log h1 { font-size: 40px; }
+    .d-log .mast { grid-template-columns: 1fr; text-align: center; }
+    .d-log .mast .r { text-align: center; }
+    .d-log .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  /* ---------- Tide Chart ---------- */
+  .d-tide .top { padding-top: 22px; display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+  .d-tide .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .d-tide .brand svg { width: 52px; height: 52px; flex: none; }
+  .d-tide h1 { margin: 0; font-size: 30px; letter-spacing: -.5px; }
+  .d-tide .tag { color: var(--soft); font-size: 13px; }
+  .d-tide .gauge { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+  .d-tide .g { border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px; min-width: 92px; background: var(--card); }
+  .d-tide .g b { display: block; font-size: 26px; line-height: 1; }
+  .d-tide .g span { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--soft); }
+  .d-tide .g.hot b { color: var(--hot); }
+  .d-tide .dunes { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .d-tide .dunes .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--soft); }
+  .d-tide .chip { border: 1px dashed var(--soft); border-radius: 99px; padding: 5px 12px; font-size: 12.5px; background: var(--card); min-width: 0; overflow-wrap: anywhere; }
+  .d-tide .chip a { font-weight: 700; text-decoration: none; }
+  .d-tide .chip i { color: var(--soft); font-style: normal; }
+  .d-tide .board { margin-top: 18px; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); border-radius: 18px; overflow: hidden; }
+  .d-tide .col { min-width: 0; padding: 14px 10px 24px; border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent); min-height: 460px; }
+  .d-tide .col:last-child { border-right: 0; }
+  .d-tide .col h2 { margin: 0 0 2px; font-size: 13px; }
+  .d-tide .col .d { font: 10.5px/1.3 var(--font-mono); color: var(--soft); margin-bottom: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .d-tide .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; margin-bottom: 10px; overflow-wrap: anywhere; }
+  .d-tide .card.live { box-shadow: 0 0 0 1px var(--glow), 0 0 22px var(--glow); }
+  .d-tide .card.stale { border-color: var(--hot); background: color-mix(in srgb, var(--hot) 8%, var(--card)); }
+  .d-tide .card .n { font: 600 11px/1.3 var(--font-mono); color: var(--accent); }
+  .d-tide .card .n a { color: inherit; }
+  .d-tide .card .t { font-weight: 700; font-size: 13.5px; line-height: 1.3; margin: 2px 0 6px; }
+  .d-tide .card .m { font-size: 11.5px; color: var(--soft); }
+  .d-tide .card .m code { font: 10.5px var(--font-mono); }
+  .d-tide .depth { display: flex; gap: 3px; margin: 8px 0 6px; }
+  .d-tide .depth i { flex: 1; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--soft) 25%, transparent); }
+  .d-tide .depth i.on, .d-tide .depth i.now { background: var(--accent); }
+  .d-tide .stale .depth i.now { background: var(--hot); }
+  .d-tide .note { font-size: 11.5px; margin-top: 6px; }
+  .d-tide .links { font-size: 11.5px; }
+  .d-tide .empty { font-size: 12px; color: var(--soft); opacity: .7; font-style: italic; }
+  .d-tide .sea { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; pointer-events: none; z-index: -1; }
+  .d-tide .sea svg { width: 100%; height: 100%; display: block; }
+  @media (max-width: 1000px) { .d-tide .board { grid-template-columns: 1fr; gap: 8px; border-radius: 0; } .d-tide .col { min-height: 0; border-right: 0; border-radius: 14px; } .d-tide .gauge { margin-left: 0; } }
+
+  /* ---------- Castle Row ---------- */
+  .d-castle .hero { position: relative; padding-top: 26px; min-height: 230px; }
+  .d-castle .orb { position: absolute; right: 70px; top: 26px; width: 80px; height: 80px; border-radius: 50%; background: var(--sun); box-shadow: 0 0 60px var(--sun); pointer-events: none; }
+  :root[data-theme="dark"] .d-castle .orb { box-shadow: 0 0 40px rgba(244,241,220,.5), inset -18px -6px 0 rgba(0,0,0,.08); }
+  .d-castle .stars { position: absolute; inset: 0 -16px; opacity: 0; pointer-events: none; background-image: radial-gradient(1.5px 1.5px at 10% 20%, #fff, transparent), radial-gradient(1px 1px at 30% 60%, #fff, transparent), radial-gradient(1.5px 1.5px at 55% 15%, #fff, transparent), radial-gradient(1px 1px at 72% 45%, #fff, transparent), radial-gradient(1px 1px at 85% 75%, #fff, transparent), radial-gradient(1.5px 1.5px at 20% 80%, #fff, transparent), radial-gradient(1px 1px at 45% 35%, #fff, transparent), radial-gradient(1px 1px at 92% 22%, #fff, transparent); }
+  :root[data-theme="dark"] .d-castle .stars { opacity: .9; }
+  .d-castle h1 { position: relative; font: 800 40px/1 var(--font-head); margin: 0; }
+  .d-castle .sub { position: relative; color: var(--soft); font-weight: 600; max-width: 60ch; }
+  .d-castle .filters { position: relative; margin-top: 22px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .d-castle .f { font: 700 13px/1 var(--font-body); padding: 9px 14px; border-radius: 99px; border: 2px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  .d-castle .f[aria-pressed="true"] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+  .d-castle .f b { opacity: .6; margin-left: 4px; }
+  .d-castle .plots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 26px 18px; }
+  .d-castle .plot { background: var(--card); border: 2px solid var(--line); border-radius: 22px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; box-shadow: 0 6px 0 var(--sand2); }
+  .d-castle .plot[hidden] { display: none; }
+  .d-castle .plot.stale { border-color: var(--hot); box-shadow: 0 6px 0 var(--hot); }
+  .d-castle .scene { height: 150px; position: relative; background: linear-gradient(180deg, transparent 0 70%, var(--sand2) 70%); }
+  .d-castle .scene svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .d-castle .stage-tag { position: absolute; left: 12px; top: 10px; font: 800 11px/1 var(--font-head); letter-spacing: .6px; text-transform: uppercase; background: var(--ink); color: var(--card); padding: 6px 9px 4px; border-radius: 99px; }
+  .d-castle .plot.stale .stage-tag { background: var(--hot); color: var(--on); }
+  .d-castle .step { position: absolute; right: 12px; top: 10px; font-weight: 800; font-size: 12px; color: var(--soft); }
+  .d-castle .body { padding: 12px 16px 16px; overflow-wrap: anywhere; }
+  .d-castle .n { font-weight: 700; font-size: 12px; color: var(--soft); }
+  .d-castle .n a { color: inherit; }
+  .d-castle .t { font: 700 18px/1.15 var(--font-head); margin: 2px 0 6px; }
+  .d-castle .m { font-size: 12px; color: var(--soft); }
+  .d-castle .m code { font: 11px var(--font-mono); }
+  .d-castle .bar { height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--soft) 20%, transparent); margin: 10px 0 8px; overflow: hidden; }
+  .d-castle .bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--sea), var(--ok)); }
+  .d-castle .note { margin-top: 8px; font-size: 12.5px; font-weight: 600; }
+  .d-castle .links a { color: var(--ink); }
+  @media (max-width: 640px) { .d-castle .orb { right: 0; width: 56px; height: 56px; } .d-castle h1 { font-size: 32px; } }
+
+  /* ---------- Treasure Map (original) ---------- */
+  .d-map header { padding: 28px 0 8px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .d-map header svg { width: 76px; height: 76px; flex: none; }
+  .d-map h1 { margin: 0; font-size: 28px; letter-spacing: .3px; }
+  .d-map .sub { color: var(--soft); }
+  .d-map .tally { margin-left: auto; text-align: right; font-size: 13px; color: var(--soft); }
+  .d-map .map { margin-top: 14px; display: flex; flex-direction: column; gap: 22px; }
+  .d-map .stop { background: var(--card); border: 2px solid var(--line); border-radius: 14px; padding: 12px 12px 14px; position: relative; box-shadow: 0 2px 0 var(--line); }
+  .d-map .stop h2 { margin: 0; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  .d-map .what { margin: 2px 0 10px; font-size: 12px; color: var(--soft); }
+  .d-map .dot { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 700; flex: none; }
+  .d-map .stop.final { border-style: dashed; }
+  .d-map .stop.final .dot { background: var(--hot); }
+  .d-map .stop.lost .dot { background: var(--soft); }
+  .d-map .trail { position: absolute; left: 24px; bottom: -22px; height: 22px; border-left: 3px dotted var(--line); }
+  .d-map .cards { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
+  .d-map .count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--soft); }
+  .d-map .empty { color: var(--soft); font-size: 12px; font-style: italic; opacity: .8; }
+  .d-map .card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; min-width: 0; }
+  .d-map .card.stale { border-color: var(--hot); }
+  .d-map .card .t { font-weight: 700; word-break: break-word; }
+  .d-map .card .t a { color: inherit; text-decoration: none; }
+  .d-map .meta { font-size: 12px; color: var(--soft); margin-top: 3px; overflow-wrap: anywhere; }
+  .d-map .meta code { font: 11.5px var(--font-mono); }
+  .d-map .badge { background: var(--sea-soft); }
+  .d-map .badge.pass { background: var(--ok); color: #fff; }
+  .d-map .badge.fail, .d-map .badge.warn { background: var(--hot); color: #fff; }
+  .d-map .note { font-size: 12px; margin-top: 6px; }
+  .d-map .links { font-size: 12px; }
+  .d-map .waves { position: fixed; left: 0; right: 0; bottom: 0; height: 26px; pointer-events: none; background: repeating-radial-gradient(circle at 50% 100%, var(--accent) 0 8px, transparent 9px 16px) 0 0 / 32px 26px; opacity: .45; }
+  @media (max-width: 640px) { .d-map .tally { margin-left: 0; text-align: left; } }
+</style>
+</head>
+<body>
+<nav class="app-nav" aria-label="Main navigation">
+  <div class="nav-inner">
+    <a href="/" id="board-nav" aria-current="page">Sandcastle Board</a>
+    <a id="evidence-nav" hidden>Evidence</a>
+    <button class="icon-btn" id="settings-open" type="button" aria-label="Settings" title="Settings" aria-controls="settings" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/><circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/></svg>
+    </button>
+  </div>
+</nav>
+<main id="app"></main>
+
+<div class="scrim" id="settings-scrim" aria-hidden="true"></div>
+<aside class="settings" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" inert>
+  <div class="settings-head">
+    <h2 id="settings-title">Settings</h2>
+    <button class="icon-btn" id="settings-close" type="button" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <fieldset>
+    <legend>Design</legend>
+    <div class="designs">
+      <input type="radio" name="design" id="design-log" value="log"><label class="opt" for="design-log"><span class="sw sw-log"></span><span><b>Ship's Log</b><small>Newspaper log. Progress as knots on a rope.</small></span></label>
+      <input type="radio" name="design" id="design-tide" value="tide"><label class="opt" for="design-tide"><span class="sw sw-tide"></span><span><b>Tide Chart</b><small>Columns from dry sand to deep water.</small></span></label>
+      <input type="radio" name="design" id="design-castle" value="castle"><label class="opt" for="design-castle"><span class="sw sw-castle"></span><span><b>Castle Row</b><small>One castle per ticket, built step by step.</small></span></label>
+      <input type="radio" name="design" id="design-map" value="map"><label class="opt" for="design-map"><span class="sw sw-map"></span><span><b>Treasure Map</b><small>The original trail down to the X.</small></span></label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Mode</legend>
+    <div class="modes">
+      <input type="radio" name="mode" id="mode-light" value="light"><label class="opt" for="mode-light"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>Light</label>
+      <input type="radio" name="mode" id="mode-dark" value="dark"><label class="opt" for="mode-dark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/></svg>Dark</label>
+      <input type="radio" name="mode" id="mode-system" value="system"><label class="opt" for="mode-system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>System</label>
+    </div>
+  </fieldset>
+  <p class="settings-note">Saved in this browser. The board pauses its 10-second refresh while this panel is open.</p>
+</aside>
+
+<script id="data" type="application/json">/*__DATA__*/null</script>
+<script>
+(function () {
+  var root = document.documentElement;
+  var data = JSON.parse(document.getElementById('data').textContent);
+  var app = document.getElementById('app');
+  var nowMs = Date.now();
+
+  // settings:start
+  var DESIGNS = ['log', 'tide', 'castle', 'map'];
+  var MODES = ['light', 'dark', 'system'];
+  var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function save(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
+  function applyMode(mode) {
+    root.dataset.mode = mode;
+    root.dataset.theme = mode === 'system' ? (media && media.matches ? 'dark' : 'light') : mode;
+  }
+  function setMode(mode) { if (MODES.indexOf(mode) < 0) return; applyMode(mode); save('sandcastle-theme', mode); }
+  function setDesign(design) { if (DESIGNS.indexOf(design) < 0) return; root.dataset.design = design; save('sandcastle-design', design); render(); }
+  if (media && media.addEventListener) media.addEventListener('change', function () { if (root.dataset.mode === 'system') applyMode('system'); });
+  // settings:end
+
+  var panel = document.getElementById('settings');
+  var opener = document.getElementById('settings-open');
+  function isOpen() { return root.classList.contains('settings-open'); }
+  function openPanel() {
+    root.classList.add('settings-open');
+    panel.inert = false;
+    opener.setAttribute('aria-expanded', 'true');
+    var checked = panel.querySelector('input[name="design"]:checked');
+    if (checked) checked.focus({ preventScroll: true });
+  }
+  function closePanel() {
+    if (!isOpen()) return;
+    root.classList.remove('settings-open');
+    panel.inert = true;
+    opener.setAttribute('aria-expanded', 'false');
+    opener.focus();
+  }
+  opener.addEventListener('click', function () { isOpen() ? closePanel() : openPanel(); });
+  document.getElementById('settings-close').addEventListener('click', closePanel);
+  document.getElementById('settings-scrim').addEventListener('click', closePanel);
+  document.addEventListener('keydown', function (e) {
+    if (!isOpen()) return;
+    if (e.key === 'Escape') { closePanel(); return; }
+    if (e.key !== 'Tab') return;
+    var items = Array.prototype.filter.call(panel.querySelectorAll('button, input:checked'), function (x) { return !x.disabled; });
+    var first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+    else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+  });
+  panel.querySelectorAll('input[name="design"]').forEach(function (input) {
+    input.checked = input.value === root.dataset.design;
+    input.addEventListener('change', function () { setDesign(input.value); });
+  });
+  panel.querySelectorAll('input[name="mode"]').forEach(function (input) {
+    input.checked = input.value === root.dataset.mode;
+    input.addEventListener('change', function () { setMode(input.value); });
+  });
+
+  // The board reloads itself; evidence pages have no refresh marker so media keeps playing.
+  var refresh = document.querySelector('meta[name="sandcastle-refresh"]');
+  if (refresh) {
+    var every = Number(refresh.content) * 1000;
+    setTimeout(function tick() { if (isOpen()) setTimeout(tick, 2000); else location.reload(); }, every);
+  }
+  if (location.protocol === 'file:') document.getElementById('board-nav').href = location.pathname;
+
+  // ---------- shared helpers ----------
+  var STOPS = [
+    { id: 'queued',       name: 'The shoreline',       short: 'Shore',  what: 'Not started: the note says what it waits for' },
+    { id: 'waiting',      name: 'Tide pool',           short: 'Pool',   what: 'Implementer found a missing prerequisite; restarts when the blocker merges' },
+    { id: 'setup',        name: 'Gather sand',         short: 'Sand',   what: 'Starting the container and site' },
+    { id: 'implementing', name: 'Build the castle',    short: 'Build',  what: 'Implementer agent working' },
+    { id: 'verifying',    name: 'Check the walls',     short: 'Check',  what: 'Verifier capturing evidence' },
+    { id: 'posting',      name: 'Message in a bottle', short: 'Bottle', what: 'Posting evidence to the ticket' },
+    { id: 'pushing',      name: 'Raise the flag',      short: 'Flag',   what: 'Pushing the branch' },
+    { id: 'ci',           name: 'Wait for the tide',   short: 'Tide',   what: 'CI running' },
+    { id: 'done',         name: 'X marks the spot',    short: 'X',      what: 'MR open, or ready locally', final: true },
+    { id: 'stopped',      name: 'Washed away',         short: '~',      what: 'Stopped or failed', lost: true }
+  ];
+  var PATH = ['setup', 'implementing', 'verifying', 'posting', 'pushing', 'ci', 'done'];
+  var runs = data.runs || [];
+  function stopOf(id) { return STOPS.filter(function (s) { return s.id === id; })[0] || { id: id, name: id, short: id, what: '' }; }
+  function ago(iso) {
+    var s = Math.max(0, Math.round((nowMs - new Date(iso).getTime()) / 1000));
+    if (s < 90) return s + 's';
+    var m = Math.round(s / 60);
+    if (m < 90) return m + 'm';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function link(href, text) {
+    var a = el('a', null, text);
+    a.href = href;
+    if (!href.startsWith('/') && !href.startsWith('file:')) { a.target = '_blank'; a.rel = 'noopener'; }
+    return a;
+  }
+  function terminal(r) { return r.stage === 'done' || r.stage === 'stopped'; }
+  function parked(r) { return r.stage === 'queued' || r.stage === 'waiting'; }
+  function stale(r) { return !terminal(r) && !parked(r) && nowMs - new Date(r.updatedAt).getTime() > 20 * 60 * 1000; }
+  function ticket(r) { return r.ticketUrl ? link(r.ticketUrl, '#' + r.iid) : document.createTextNode('#' + r.iid); }
+  function timing(r) {
+    if (parked(r)) return 'waiting ' + ago(r.stageSince);
+    return (terminal(r) ? 'finished ' + ago(r.stageSince) + ' ago' : 'in this stage ' + ago(r.stageSince)) + ' · total ' + ago(r.startedAt);
+  }
+  function runLinks(r) {
+    var l = el('div', 'links');
+    if (r.mr) l.appendChild(link(r.mr, 'Merge request'));
+    if (r.evidenceUrl) l.appendChild(link(r.evidenceUrl, 'Evidence'));
+    return l.children.length ? l : null;
+  }
+  function add(parent) { for (var i = 1; i < arguments.length; i++) if (arguments[i]) parent.appendChild(arguments[i]); return parent; }
+  function tally() {
+    var c = function (stages) { return runs.filter(function (r) { return stages.indexOf(r.stage) >= 0; }).length; };
+    var waiting = c(['queued', 'waiting']), done = c(['done']), lost = c(['stopped']);
+    return { building: runs.length - waiting - done - lost, waiting: waiting, done: done, lost: lost };
+  }
+  function footer(note) {
+    var f = el('footer', 'site-foot');
+    f.appendChild(el('span', null, runs.length ? 'Last update ' + ago(data.generatedAt) + ' ago' : 'No runs yet. Start one with main.mts.'));
+    f.appendChild(el('span', null, note));
+    return f;
+  }
+  function svg(markup) { var span = el('span'); span.innerHTML = markup; return span.firstChild; }
+
+  // ---------- Ship's Log ----------
+  function renderLog() {
+    var t = tally();
+    var mast = el('div', 'mast');
+    add(mast, el('div', 'l', 'Shared state dir · watch kept every 10 seconds'));
+    var h1 = el('h1', null, 'The Sandcastle '); h1.appendChild(el('em', null, 'Log')); mast.appendChild(h1);
+    mast.appendChild(el('div', 'r', new Date(nowMs).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' · ' + new Date(nowMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })));
+    app.appendChild(mast);
+    var stats = el('div', 'stats');
+    [['Under way', t.building], ['In harbour', t.waiting], ['Arrived', t.done], ['Lost at sea', t.lost, 'red']].forEach(function (s) {
+      add(stats, add(el('div', 'stat' + (s[2] ? ' ' + s[2] : '')), el('b', null, String(s[1])), el('span', null, s[0])));
+    });
+    app.appendChild(stats);
+    if (!runs.length) app.appendChild(el('p', 'empty-board', 'The log is empty. No voyages yet.'));
+    var SECTIONS = [
+      ['Under way', 'active passages', function (r) { return !parked(r) && !terminal(r); }],
+      ['In harbour', 'waiting to sail', parked],
+      ['Arrived', 'ready to merge', function (r) { return r.stage === 'done'; }],
+      ['Lost at sea', 'stopped or failed', function (r) { return r.stage === 'stopped'; }]
+    ];
+    SECTIONS.forEach(function (sec) {
+      var list = runs.filter(sec[2]).sort(function (a, b) { return (stale(b) - stale(a)) || PATH.indexOf(b.stage) - PATH.indexOf(a.stage); });
+      if (!list.length) return;
+      var s = el('section'), h = el('h2', null, sec[0]);
+      h.appendChild(el('small', null, sec[1] + ' · ' + list.length));
+      s.appendChild(h);
+      list.forEach(function (r) {
+        var e = el('article', 'entry' + (stale(r) ? ' stale' : ''));
+        var num = el('div', 'num'); num.appendChild(ticket(r)); if (r.project) num.appendChild(el('small', null, r.project));
+        var mid = el('div');
+        mid.appendChild(el('div', 'ttl', r.title || r.key));
+        if (r.branch) mid.appendChild(el('div', 'meta', r.branch + (r.pid ? ' · pid ' + r.pid : '')));
+        if (r.note) mid.appendChild(el('div', 'note', '“' + r.note + '”'));
+        if (r.verdict) mid.appendChild(el('span', 'stamp ' + (r.verdict === 'PASS' ? 'pass' : 'fail'), r.verdict === 'PASS' ? 'Verified' : r.verdict));
+        if (stale(r)) mid.appendChild(el('span', 'stamp quiet', 'Silent ' + ago(r.updatedAt)));
+        add(mid, runLinks(r));
+        var rope = el('div', 'rope');
+        if (!parked(r)) {
+          rope.appendChild(svg(ropeSvg(r)));
+          var lab = el('div', 'lab'); PATH.forEach(function (id) { lab.appendChild(el('span', null, stopOf(id).short)); }); rope.appendChild(lab);
+        }
+        var now = el('div', 'now', stopOf(r.stage).name + ' ');
+        now.appendChild(el('em', null, (terminal(r) ? ago(r.stageSince) + ' ago' : 'for ' + ago(r.stageSince)) + ' · voyage ' + ago(r.startedAt)));
+        rope.appendChild(now);
+        add(s, add(e, num, mid, rope));
+      });
+      app.appendChild(s);
+    });
+    app.appendChild(footer('Entries silent 20+ minutes are struck in red'));
+  }
+  function ropeSvg(r) {
+    var idx = PATH.indexOf(r.stage), quiet = stale(r), n = PATH.length, w = 340, gap = w / (n - 1);
+    var curve = function (count) { var d = 'M0 23'; for (var i = 0; i < count; i++) d += ' Q ' + (i * gap + gap / 2) + ' ' + (i % 2 ? 17 : 29) + ' ' + ((i + 1) * gap) + ' 23'; return d; };
+    var s = '<svg viewBox="-10 0 ' + (w + 20) + ' 46" preserveAspectRatio="none" aria-hidden="true">';
+    s += '<path d="' + curve(n - 1) + '" fill="none" stroke="var(--line)" stroke-width="3"/>';
+    if (idx > 0) s += '<path d="' + curve(idx) + '" fill="none" stroke="var(--ink)" stroke-width="3"/>';
+    PATH.forEach(function (_, i) {
+      var x = i * gap, done = i < idx || r.stage === 'done', cur = i === idx && r.stage !== 'done';
+      var col = quiet && cur ? 'var(--hot)' : 'var(--ink)';
+      if (r.stage === 'stopped') { s += '<circle cx="' + x + '" cy="23" r="6" fill="var(--bg)" stroke="var(--line)" stroke-width="2.5"/>'; return; }
+      if (i === n - 1) s += '<path d="M' + (x - 7) + ' 16 l14 14 M' + (x + 7) + ' 16 l-14 14" stroke="' + (done ? 'var(--hot)' : 'var(--line)') + '" stroke-width="3.5" stroke-linecap="round"/>';
+      else s += '<circle cx="' + x + '" cy="23" r="' + (cur ? 9 : 6) + '" fill="' + (done || cur ? col : 'var(--bg)') + '" stroke="' + (done || cur ? col : 'var(--line)') + '" stroke-width="2.5"' + (cur && !quiet ? ' class="knot-now"' : '') + '/>';
+    });
+    if (r.stage === 'stopped') s += '<path d="M120 10 l100 26 M120 36 l100 -26" stroke="var(--hot)" stroke-width="3" stroke-linecap="round"/>';
+    return s + '</svg>';
+  }
+
+  // ---------- Tide Chart ----------
+  function renderTide() {
+    var t = tally();
+    var top = el('div', 'top');
+    var brand = el('div', 'brand');
+    brand.appendChild(svg('<svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="25" fill="none" stroke="currentColor" stroke-opacity=".25"/><path d="M6 32c5-4 9-4 13 0s9 4 13 0 9-4 14 0" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/><path d="M6 40c5-4 9-4 13 0s9 4 13 0 9-4 14 0" fill="none" stroke="var(--accent)" stroke-opacity=".5" stroke-width="3" stroke-linecap="round"/><path d="M18 24V14h4v3h3v-3h4v3h3v-3h4v10z" fill="currentColor"/></svg>'));
+    add(brand, add(el('div'), el('h1', null, 'Tide Chart'), el('div', 'tag', 'Tickets wade from dry sand into deep water. Further right = closer to merged.')));
+    var gauge = el('div', 'gauge');
+    [['building', t.building], ['waiting', t.waiting], ['ready', t.done], ['washed away', t.lost, 'hot']].forEach(function (g) {
+      add(gauge, add(el('div', 'g' + (g[2] ? ' ' + g[2] : '')), el('b', null, String(g[1])), el('span', null, g[0])));
+    });
+    app.appendChild(add(top, brand, gauge));
+    var waiting = runs.filter(parked);
+    if (waiting.length) {
+      var dunes = el('div', 'dunes'); dunes.appendChild(el('span', 'lbl', 'On the dunes'));
+      waiting.forEach(function (r) {
+        var c = el('span', 'chip'); c.appendChild(ticket(r));
+        c.appendChild(document.createTextNode(' ' + (r.title || '') + ' '));
+        c.appendChild(el('i', null, '· ' + (r.note || stopOf(r.stage).name) + ' · ' + ago(r.stageSince)));
+        dunes.appendChild(c);
+      });
+      app.appendChild(dunes);
+    }
+    var cols = PATH.concat(['stopped']);
+    var depth = ['0 m · dry sand', '1 m', '2 m', '3 m', '4 m', '5 m · surf', 'harbour', 'adrift'];
+    var board = el('div', 'board');
+    cols.forEach(function (id, i) {
+      var col = el('section', 'col');
+      col.style.background = id === 'stopped' ? 'color-mix(in srgb, var(--hot) 10%, var(--c0))' : 'color-mix(in srgb, var(--c6) ' + Math.round(i / 6 * 100) + '%, var(--c0))';
+      add(col, el('h2', null, stopOf(id).name), el('div', 'd', depth[i]));
+      var here = runs.filter(function (r) { return r.stage === id; });
+      if (!here.length) col.appendChild(el('div', 'empty', 'calm water'));
+      here.forEach(function (r) {
+        var quiet = stale(r), active = i < 6;
+        var c = el('article', 'card' + (quiet ? ' stale' : '') + (active && !quiet ? ' live' : ''));
+        var n = el('div', 'n'); n.appendChild(ticket(r)); if (r.project) n.appendChild(document.createTextNode(' · ' + r.project));
+        add(c, n, el('div', 't', r.title || ''));
+        if (id !== 'stopped') {
+          var d = el('div', 'depth');
+          for (var k = 0; k < 6; k++) d.appendChild(el('i', i === 6 || k < i ? 'on' : k === i ? 'now' : ''));
+          c.appendChild(d);
+        }
+        var m = el('div', 'm');
+        if (r.branch) { m.appendChild(el('code', null, r.branch)); m.appendChild(document.createElement('br')); }
+        m.appendChild(document.createTextNode(timing(r)));
+        c.appendChild(m);
+        if (r.verdict) c.appendChild(el('span', 'badge ' + (r.verdict === 'PASS' ? 'pass' : 'fail'), r.verdict));
+        if (active) c.appendChild(el('span', 'badge' + (quiet ? ' warn' : ' pulse'), quiet ? 'quiet ' + ago(r.updatedAt) + ' · pid ' + r.pid : 'working'));
+        if (r.note) c.appendChild(el('div', 'note', r.note));
+        add(c, runLinks(r));
+        col.appendChild(c);
+      });
+      board.appendChild(col);
+    });
+    app.appendChild(board);
+    app.appendChild(footer('Page refreshes every 10s. Cards quiet for 20+ minutes turn red.'));
+    var sea = el('div', 'sea');
+    sea.appendChild(svg('<svg viewBox="0 0 1440 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 40 Q 90 10 180 40 T 360 40 T 540 40 T 720 40 T 900 40 T 1080 40 T 1260 40 T 1440 40 V90 H0Z" fill="var(--wave1)"/><path d="M0 60 Q 120 35 240 60 T 480 60 T 720 60 T 960 60 T 1200 60 T 1440 60 V90 H0Z" fill="var(--wave2)"/></svg>'));
+    app.appendChild(sea);
+  }
+
+  // ---------- Castle Row ----------
+  function castleSvg(level, stage) {
+    var W = 'fill="var(--wall)" stroke="var(--wall2)" stroke-width="2.5" stroke-linejoin="round"';
+    var s = '<svg viewBox="0 0 300 150" preserveAspectRatio="xMidYMax meet" aria-hidden="true">';
+    if (stage === 'stopped') {
+      s += '<path d="M60 130 Q 150 92 240 130Z" ' + W + '/><path d="M20 120 q 25 -22 50 0 t 50 0 t 50 0 t 50 0 t 50 0 t 50 0 V150 H20Z" fill="var(--sea)" opacity=".85"/>';
+      s += '<path d="M40 112 q 12 -10 24 0" stroke="#fff" stroke-width="3" fill="none" opacity=".7"/><path d="M190 112 q 12 -10 24 0" stroke="#fff" stroke-width="3" fill="none" opacity=".7"/>';
+      return s + '</svg>';
+    }
+    if (level < 0) {
+      s += '<path d="M110 132 Q150 108 190 132Z" ' + W + '/><path d="M200 96 h34 l-5 36 h-24z" fill="var(--flag)" stroke="var(--wall2)" stroke-width="2.5"/><path d="M203 96 q 14 -22 28 0" fill="none" stroke="var(--wall2)" stroke-width="2.5"/>';
+      s += '<path d="M90 70 l6 50" stroke="var(--wall2)" stroke-width="4" stroke-linecap="round"/><path d="M88 118 l14 -2 2 16 -12 2z" fill="var(--sea)" stroke="var(--wall2)" stroke-width="2"/>';
+      return s + '</svg>';
+    }
+    s += '<path d="M70 134 Q150 112 230 134Z" ' + W + '/>';
+    if (level >= 1) s += '<rect x="90" y="102" width="120" height="30" rx="3" ' + W + '/>';
+    if (level >= 2) s += '<rect x="80" y="70" width="30" height="62" ' + W + '/><path d="M80 70v-8h7v5h5v-5h6v5h5v-5h7v8" ' + W + '/>';
+    if (level >= 3) s += '<rect x="190" y="70" width="30" height="62" ' + W + '/><path d="M190 70v-8h7v5h5v-5h6v5h5v-5h7v8" ' + W + '/>';
+    if (level >= 4) s += '<rect x="125" y="56" width="50" height="76" ' + W + '/><path d="M125 56v-9h8v6h7v-6h8v6h7v-6h8v6h7v-6h0v9" ' + W + '/><rect x="94" y="84" width="6" height="10" rx="3" fill="var(--win)"/><rect x="202" y="84" width="6" height="10" rx="3" fill="var(--win)"/><rect x="146" y="72" width="8" height="12" rx="4" fill="var(--win)"/>';
+    if (level >= 5) s += '<path d="M140 132v-18a10 10 0 0 1 20 0v18z" fill="var(--wall2)"/>';
+    if (level >= 6) s += '<path d="M150 47V14" stroke="var(--ink)" stroke-width="3"/><path d="M150 14l' + (level >= 7 ? '30 8-30 8' : '14 5-14 5') + 'z" fill="var(--flag)"/>';
+    if (level >= 7) s += '<g fill="var(--flag)"><circle cx="60" cy="40" r="3"/><circle cx="235" cy="30" r="3" fill="var(--sea)"/><circle cx="250" cy="70" r="2.5"/><circle cx="48" cy="80" r="2.5" fill="var(--ok)"/><circle cx="215" cy="50" r="2" fill="var(--ok)"/></g>';
+    return s + '</svg>';
+  }
+  function renderCastle() {
+    var t = tally();
+    var hero = el('div', 'hero');
+    add(hero, el('div', 'stars'), el('div', 'orb'), el('h1', null, 'Castle Row'), el('div', 'sub', 'One castle per ticket. Each step adds a piece. A flag means it is ready to merge.'));
+    var filters = el('div', 'filters');
+    var groups = [['All', runs.length, function () { return true; }], ['Building', t.building, function (r) { return !parked(r) && !terminal(r); }], ['Waiting', t.waiting, parked], ['Flag up', t.done, function (r) { return r.stage === 'done'; }], ['Washed away', t.lost, function (r) { return r.stage === 'stopped'; }]];
+    var plots = el('div', 'plots');
+    groups.forEach(function (g, gi) {
+      var b = el('button', 'f', g[0]); b.type = 'button'; b.setAttribute('aria-pressed', String(gi === 0));
+      b.appendChild(el('b', null, String(g[1])));
+      b.addEventListener('click', function () {
+        filters.querySelectorAll('.f').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+        plots.querySelectorAll('.plot').forEach(function (p) { p.hidden = !g[2](p.run); });
+      });
+      filters.appendChild(b);
+    });
+    hero.appendChild(filters);
+    app.appendChild(hero);
+    if (!runs.length) app.appendChild(el('p', 'empty-board', 'The beach is empty. No castles yet.'));
+    var order = ['implementing', 'setup', 'verifying', 'posting', 'pushing', 'ci', 'waiting', 'queued', 'done', 'stopped'];
+    runs.slice().sort(function (a, b) { return (stale(b) - stale(a)) || (order.indexOf(a.stage) - order.indexOf(b.stage)); }).forEach(function (r) {
+      var idx = PATH.indexOf(r.stage), quiet = stale(r), waiting = parked(r);
+      var p = el('article', 'plot' + (quiet ? ' stale' : '')); p.run = r;
+      var scene = el('div', 'scene');
+      scene.appendChild(svg(castleSvg(waiting ? -1 : idx + 1, r.stage)));
+      scene.appendChild(el('span', 'stage-tag', quiet ? 'Gone quiet' : stopOf(r.stage).name));
+      if (idx >= 0) scene.appendChild(el('span', 'step', 'step ' + (idx + 1) + ' of 7'));
+      var body = el('div', 'body');
+      var n = el('div', 'n'); n.appendChild(ticket(r)); if (r.project) n.appendChild(document.createTextNode(' · ' + r.project));
+      add(body, n, el('div', 't', r.title || ''));
+      if (idx >= 0) { var bar = el('div', 'bar'), fill = el('i'); fill.style.width = Math.round((idx + 1) / 7 * 100) + '%'; bar.appendChild(fill); body.appendChild(bar); }
+      var m = el('div', 'm');
+      if (r.branch) { m.appendChild(el('code', null, r.branch)); m.appendChild(document.createElement('br')); }
+      m.appendChild(document.createTextNode(timing(r)));
+      body.appendChild(m);
+      if (r.verdict) body.appendChild(el('span', 'badge ' + (r.verdict === 'PASS' ? 'pass' : 'fail'), r.verdict));
+      if (!terminal(r) && !waiting) body.appendChild(el('span', 'badge' + (quiet ? ' warn' : ' pulse'), quiet ? 'quiet ' + ago(r.updatedAt) + ' · pid ' + r.pid : 'building…'));
+      if (r.note) body.appendChild(el('div', 'note', r.note));
+      add(body, runLinks(r));
+      plots.appendChild(add(p, scene, body));
+    });
+    app.appendChild(plots);
+    app.appendChild(footer('Page refreshes every 10s. Castles quiet for 20+ minutes turn red.'));
+  }
+
+  // ---------- Treasure Map ----------
+  function renderMap() {
+    var t = tally();
+    var header = el('header');
+    header.appendChild(svg('<svg viewBox="0 0 80 80" role="img" aria-label="Sandcastle"><rect x="8" y="46" width="64" height="24" rx="3" fill="#e3c98f" stroke="#c9a45c" stroke-width="2"/><rect x="12" y="30" width="16" height="22" fill="#ecd5a0" stroke="#c9a45c" stroke-width="2"/><rect x="52" y="30" width="16" height="22" fill="#ecd5a0" stroke="#c9a45c" stroke-width="2"/><rect x="30" y="22" width="20" height="30" fill="#f1dfb6" stroke="#c9a45c" stroke-width="2"/><path d="M12 30v-5h4v3h3v-3h4v3h3v-3h2v5zM52 30v-5h4v3h3v-3h4v3h3v-3h2v5zM30 22v-5h5v3h4v-3h5v3h4v-5z" fill="#ecd5a0" stroke="#c9a45c" stroke-width="2" stroke-linejoin="round"/><path d="M40 17V6l10 3-10 3" fill="#c0392b"/><path d="M36 70v-10a4 4 0 0 1 8 0v10z" fill="#a9824a"/></svg>'));
+    add(header, add(el('div'), el('h1', null, 'Sandcastle Map'), el('div', 'sub', 'Every ticket is a castle on the shore. Follow the dotted trail down to the X.')));
+    header.appendChild(el('div', 'tally', t.building + ' building · ' + t.waiting + ' waiting · ' + t.done + ' at the X · ' + t.lost + ' washed away'));
+    app.appendChild(header);
+    var map = el('div', 'map'), shown = 0;
+    STOPS.forEach(function (stop) {
+      var here = runs.filter(function (r) { return r.stage === stop.id; });
+      if ((stop.id === 'queued' || stop.id === 'waiting') && !here.length) return;
+      shown++;
+      var box = el('section', 'stop' + (stop.final ? ' final' : '') + (stop.lost ? ' lost' : ''));
+      var h = el('h2');
+      add(h, el('span', 'dot', stop.final ? 'X' : stop.lost ? '~' : String(shown)), el('span', null, stop.name), el('span', 'count', here.length ? String(here.length) : ''));
+      add(box, h, el('div', 'what', stop.what));
+      if (!stop.final && !stop.lost) box.appendChild(el('span', 'trail'));
+      if (!here.length) box.appendChild(el('div', 'empty', 'nothing here yet'));
+      var cards = el('div', 'cards');
+      here.forEach(function (r) {
+        var quiet = stale(r);
+        var card = el('div', 'card' + (quiet ? ' stale' : ''));
+        var tt = el('div', 't'); tt.appendChild(ticket(r)); tt.appendChild(document.createTextNode(' ' + (r.title || '')));
+        card.appendChild(tt);
+        var m = el('div', 'meta');
+        if (r.project) { m.appendChild(document.createTextNode(r.project)); m.appendChild(document.createElement('br')); }
+        if (r.branch) { m.appendChild(el('code', null, r.branch)); m.appendChild(document.createElement('br')); }
+        m.appendChild(document.createTextNode(timing(r)));
+        card.appendChild(m);
+        if (r.verdict) card.appendChild(el('span', 'badge ' + (r.verdict === 'PASS' ? 'pass' : 'fail'), r.verdict));
+        if (!terminal(r) && !parked(r)) card.appendChild(el('span', 'badge' + (quiet ? ' warn' : ' pulse'), quiet ? 'quiet ' + ago(r.updatedAt) + ' · pid ' + r.pid : 'working'));
+        if (r.note) card.appendChild(el('div', 'note', r.note));
+        add(card, runLinks(r));
+        cards.appendChild(card);
+      });
+      if (here.length) box.appendChild(cards);
+      map.appendChild(box);
+    });
+    app.appendChild(map);
+    app.appendChild(footer('Page refreshes every 10s. Cards that go quiet for 20+ minutes turn red.'));
+    app.appendChild(el('div', 'waves'));
+  }
+
+  // ---------- Evidence (shared by all designs) ----------
+  function renderEvidence(evidence) {
+    var run = evidence.run;
+    var nav = document.getElementById('evidence-nav');
+    document.getElementById('board-nav').removeAttribute('aria-current');
+    nav.hidden = false; nav.href = evidence.url; nav.setAttribute('aria-current', 'page');
+    document.title = 'Evidence · ' + run.key;
+    var head = el('div', 'ev-head');
+    add(head, add(el('div'), el('h1', null, 'Evidence · #' + run.iid), el('div', 'sub', (run.project ? run.project + ' · ' : '') + (run.title || run.key))));
+    head.appendChild(el('div', 'state', stopOf(run.stage).name + (run.verdict ? ' · ' + run.verdict : '')));
+    app.appendChild(head);
+    var summary = el('section', 'ev-card ev-summary');
+    var links = el('div', 'links');
+    links.appendChild(link('/', '← Back to board'));
+    if (run.ticketUrl) links.appendChild(link(run.ticketUrl, 'Ticket #' + run.iid));
+    if (run.mr) links.appendChild(link(run.mr, 'Merge request'));
+    summary.appendChild(links);
+    if (run.verdict) summary.appendChild(el('span', 'badge ' + (run.verdict === 'PASS' ? 'pass' : 'fail'), run.verdict));
+    if (run.note) summary.appendChild(el('p', null, run.note));
+    app.appendChild(summary);
+    var grid = el('div', 'ev-grid');
+    evidence.files.forEach(function (file) {
+      var item = el('article', 'ev-card');
+      item.appendChild(el('h2', null, file.name));
+      if (file.kind === 'image') {
+        var image = el('img'); image.src = file.url; image.alt = file.name; image.loading = 'lazy';
+        var preview = link(file.url, ''); preview.appendChild(image); item.appendChild(preview);
+      } else if (file.kind === 'video') {
+        var video = el('video'); video.src = file.url; video.controls = true; video.preload = 'metadata'; item.appendChild(video);
+      } else if (file.kind === 'text') {
+        item.appendChild(el('pre', null, file.text));
+        if (file.truncated) item.appendChild(el('p', 'sub', 'Preview limited to 64 KiB. Open the original for the full file.'));
+      }
+      var actions = el('div', 'links');
+      actions.appendChild(link(file.url, 'Open original'));
+      item.appendChild(actions);
+      grid.appendChild(item);
+    });
+    if (!evidence.files.length) grid.appendChild(el('p', 'ev-card', 'No evidence files yet. Return after the verifier has captured evidence.'));
+    app.appendChild(grid);
+    var f = el('footer', 'site-foot'); f.appendChild(el('span', null, 'Evidence files from this run. Videos play on demand.'));
+    app.appendChild(f);
+  }
+
+  var RENDER = { log: renderLog, tide: renderTide, castle: renderCastle, map: renderMap };
+  function render() {
+    app.replaceChildren();
+    app.className = 'd-' + root.dataset.design;
+    if (data.evidence) renderEvidence(data.evidence);
+    else (RENDER[root.dataset.design] || renderLog)();
+  }
+  render();
+})();
+</script>
+</body>
+</html>
