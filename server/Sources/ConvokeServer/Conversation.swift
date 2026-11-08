@@ -55,6 +55,11 @@ final class Conversation: @unchecked Sendable {
         self.socket = socket
         self.timeout = timeout
         self.synthesize = synthesize
+        socket.onText { [weak self] _, text in self?.receive(text) }
+        socket.onBinary { [weak self] _, _ in self?.close() }
+        // Retain the conversation until the channel closes, not through the
+        // socket's permanent message callbacks.
+        socket.onClose.whenComplete { _ in self.disconnected() }
     }
 
     func receive(_ frame: String) {
@@ -166,10 +171,7 @@ func configure(
     app.get("conversation") { _ -> Response in
         let response = Response(status: .switchingProtocols)
         response.upgrader = ConversationUpgrader { socket in
-            let conversation = Conversation(socket: socket, timeout: turnTimeout, synthesize: synthesize)
-            socket.onText { _, text in conversation.receive(text) }
-            socket.onBinary { _, _ in conversation.close() }
-            socket.onClose.whenComplete { _ in conversation.disconnected() }
+            _ = Conversation(socket: socket, timeout: turnTimeout, synthesize: synthesize)
         }
         return response
     }

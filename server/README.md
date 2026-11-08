@@ -32,7 +32,7 @@ The server trims whitespace and replies with `agent.text` containing `You said: 
 
 Wait for `agent.done` before sending another turn. Playback and microphone control belong to the client.
 
-Limits are 4096 UTF-8 bytes of trimmed input, 32768 UTF-8 bytes per JSON message, 16384 decoded bytes per audio chunk, and 8 MiB of accumulated PCM per turn. Fragmented incoming messages share the same 32768-byte limit. A turn has a 120-second deadline, including synthesis and writes. Invalid input, binary messages, overlapping turns, conversion or synthesis errors, oversized audio, and timeouts close the connection. A disconnect cancels synthesis. Reconnecting starts a new session; interrupted turns are not resumed.
+Limits are 4096 UTF-8 bytes of trimmed input, 32768 UTF-8 bytes per JSON message, 16384 decoded bytes per audio chunk, and 8 MiB of accumulated PCM per turn. Fragmented incoming messages share the same 32768-byte limit. A turn has a 120-second deadline, including synthesis and writes. Invalid input, binary messages, overlapping turns, conversion or synthesis errors, oversized audio, and timeouts close the connection. A close handshake has a one-second deadline, after which TCP is forcibly closed even if the peer does not acknowledge or a write is stalled. No further application or ping messages are processed while closing. Client frames must be masked and must not set reserved bits, since no extensions are negotiated. A disconnect cancels synthesis and releases the conversation. Reconnecting starts a new session; interrupted turns are not resumed.
 
 Transcripts and audio stay in memory. The application neither writes them to disk nor logs transcript content. There is no agent integration, voice selection, or Kokoro.
 
@@ -45,6 +45,6 @@ swift test
 CONVOKE_TEST_SYSTEM_VOICE=1 swift test
 ```
 
-The default XCTest suite injects synthesis and needs no audio hardware. It covers validation, wire and fragmented-message limits, invalid UTF-8, ordering and chunk counts, sequential turns, failure closure, timeout and disconnect cancellation. Converter tests use generated PCM buffers to check resampling, mono Int16 little-endian output, and the cap during accumulation. Tests bind loopback on an ephemeral port, regardless of the run-time host and port configuration.
+The default XCTest suite injects synthesis and needs no audio hardware. It covers validation, wire and fragmented-message limits, invalid UTF-8, ordering and chunk counts, sequential turns, failure closure, timeout and disconnect cancellation. Regression tests check conversation deallocation, unacknowledged close handshakes, stalled writes, and masking/reserved-bit violations on complete and fragmented wire frames. Converter tests use generated PCM buffers to check resampling, mono Int16 little-endian output, and the cap during accumulation. Tests bind loopback on an ephemeral port, regardless of the run-time host and port configuration.
 
 The opt-in voice check verifies non-silent PCM, not physical iPhone playback or Tailscale connectivity. Those remain separate first-slice acceptance checks.
