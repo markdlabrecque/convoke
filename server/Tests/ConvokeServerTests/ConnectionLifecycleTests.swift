@@ -99,6 +99,55 @@ final class ConnectionLifecycleTests: XCTestCase {
         }
     }
 
+    func testInvalidClosePayloadLengthsAndStatusCodes() async throws {
+        var payloads = [Data([1])]
+        for code: UInt16 in [0, 999, 1004, 1005, 1006, 1015, 1016, 2000, 2999, 5000, 65535] {
+            payloads.append(Data([UInt8(code >> 8), UInt8(code & 0xFF)]))
+        }
+        for payload in payloads {
+            try await assertCloseReply(to: payload, expectedCode: 1002)
+        }
+    }
+
+    func testInvalidCloseReasonUTF8() async throws {
+        for reason: [UInt8] in [[0xFF], [0xC3], [0xC0, 0xAF], [0xED, 0xA0, 0x80], [0xF4, 0x90, 0x80, 0x80]] {
+            try await assertCloseReply(to: Data([3, 232] + reason), expectedCode: 1007)
+        }
+    }
+
+    func testValidClosePayloads() async throws {
+        try await assertCloseReply(to: Data(), expectedCode: 1000)
+        for code: UInt16 in [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 3000, 3999, 4000, 4999] {
+            try await assertCloseReply(to: Data([UInt8(code >> 8), UInt8(code & 0xFF)]), expectedCode: code)
+        }
+        for reason in ["goodbye", "À bientôt 🌍", "\u{FFFD}", String(repeating: "x", count: 123)] {
+            var payload = Data([3, 232])
+            payload.append(contentsOf: reason.utf8)
+            try await assertCloseReply(to: payload, expectedCode: 1000)
+        }
+    }
+
+    func testInvalidCloseAcknowledgmentDoesNotEmitAnotherClose() async throws {
+        try await withRawServer { peer in
+            try peer.send(text: "{")
+            let close = try peer.receiveFrame()
+            XCTAssertEqual(close.opcode, 8)
+            XCTAssertEqual(close.payload, Data([3, 240]))
+            try peer.send(payload: Data([3, 236]), opcode: 8) // Prohibited 1004.
+            XCTAssertEqual(try peer.read(upTo: 1).count, 0)
+        }
+    }
+
+    private func assertCloseReply(to payload: Data, expectedCode: UInt16) async throws {
+        try await withRawServer { peer in
+            try peer.send(payload: payload, opcode: 8)
+            let close = try peer.receiveFrame()
+            XCTAssertEqual(close.opcode, 8)
+            XCTAssertEqual(close.payload, Data([UInt8(expectedCode >> 8), UInt8(expectedCode & 0xFF)]))
+            XCTAssertEqual(try peer.read(upTo: 1).count, 0)
+        }
+    }
+
     private func withRawServer(
         turnTimeout: TimeAmount = .seconds(10), body: (RawPeer) throws -> Void
     ) async throws {
@@ -188,7 +237,10 @@ private final class RawPeer {
     }
 
     func send(text: String, opcode: UInt8 = 1, fin: Bool = true, masked: Bool = true, reserved: UInt8 = 0) throws {
-        let payload = Data(text.utf8)
+        try send(payload: Data(text.utf8), opcode: opcode, fin: fin, masked: masked, reserved: reserved)
+    }
+
+    func send(payload: Data, opcode: UInt8, fin: Bool = true, masked: Bool = true, reserved: UInt8 = 0) throws {
         precondition(payload.count < 126)
         var bytes = Data([(fin ? 0x80 : 0) | reserved | opcode, (masked ? 0x80 : 0) | UInt8(payload.count)])
         let mask: [UInt8] = [1, 2, 3, 4]

@@ -59,27 +59,49 @@ final class ConnectionFrames: ChannelDuplexHandler {
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let frame = unwrapInboundIn(data)
-        if closing {
-            // Permit a close acknowledgment, but no more application messages
-            // or ping responses while waiting for it.
-            if frame.opcode == .connectionClose { context.fireChannelRead(data) }
-            return
-        }
         let knownOpcode: Bool
         switch frame.opcode {
         case .text, .binary, .continuation, .connectionClose, .ping, .pong: knownOpcode = true
         default: knownOpcode = false
         }
-        guard frame.maskKey != nil, !frame.rsv1, !frame.rsv2, !frame.rsv3, knownOpcode else {
+        let rejection: UInt16?
+        if frame.maskKey == nil || frame.rsv1 || frame.rsv2 || frame.rsv3 || !knownOpcode {
+            rejection = 1002
+        } else {
+            rejection = closePayloadError(frame)
+        }
+        if let rejection {
+            // A close is already on the wire. Terminate an invalid acknowledgment
+            // without emitting a second close frame.
+            if closing { context.close(promise: nil); return }
             beginClosing(context: context)
             var payload = context.channel.allocator.buffer(capacity: 2)
-            payload.writeInteger(UInt16(1002))
+            payload.writeInteger(rejection)
             let channel = context.channel
             context.writeAndFlush(wrapOutboundOut(WebSocketFrame(fin: true, opcode: .connectionClose, data: payload)))
                 .whenComplete { _ in channel.close(mode: .all, promise: nil) }
             return
         }
+        if closing {
+            // Permit only a validated close acknowledgment while closing.
+            if frame.opcode == .connectionClose { context.fireChannelRead(data) }
+            return
+        }
         context.fireChannelRead(data)
+    }
+
+    private func closePayloadError(_ frame: WebSocketFrame) -> UInt16? {
+        guard frame.opcode == .connectionClose else { return nil }
+        var payload = frame.unmaskedData
+        guard payload.readableBytes > 0 else { return nil }
+        guard let code: UInt16 = payload.readInteger() else { return 1002 }
+        // RFC 6455 wire codes plus registered 1012-1014. Other protocol and
+        // extension codes are reserved; application/private codes use 3000-4999.
+        switch code {
+        case 1000...1003, 1007...1014, 3000...4999: break
+        default: return 1002
+        }
+        return String(bytes: payload.readableBytesView, encoding: .utf8) == nil ? 1007 : nil
     }
 
     func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
