@@ -42,7 +42,7 @@ targets:
   ConvokeTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [Tests, App/WebSocketTransport.swift, App/AppleSpeechCapture.swift]
+    sources: [Tests, App/WebSocketTransport.swift, App/AppleSpeechCapture.swift, App/PCMPlayer.swift]
     dependencies:
       - package: ConvokeCore
     settings:

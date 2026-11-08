@@ -65,7 +65,7 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(transport.connects, 0)
     }
 
-    func testCaptureOnlyInReadyAndPlaybackHooksGateTurns() async {
+    func testCaptureOnlyInReadyAndWaitingGatesRecording() async {
         makeSession()
         await session.startCapture()
         XCTAssertEqual(speech.starts, 0)
@@ -78,13 +78,6 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .waiting)
         await session.startCapture()
         XCTAssertEqual(speech.starts, 1)
-        session.responsePlaybackStarted()
-        XCTAssertEqual(session.state, .playing)
-        await session.startCapture()
-        XCTAssertEqual(speech.starts, 1)
-        session.responseCompleted()
-        await session.startCapture()
-        XCTAssertEqual(speech.starts, 2)
     }
 
     func testTrimmedFinalTranscriptIsJSONTextFrame() async throws {
@@ -130,7 +123,8 @@ final class SessionControllerTests: XCTestCase {
         await session.submitCapture()
         XCTAssertEqual(session.state, .waiting)
         XCTAssertLessThanOrEqual(transport.sent[0].utf8.count, 32768)
-        session.responseCompleted()
+        session.disconnect()
+        await connect()
         speech.text = String(repeating: "👋", count: 1024)
         await session.startCapture()
         await session.submitCapture()
@@ -306,6 +300,10 @@ private final class FakeTransport: ConversationTransport {
         if let connectError { throw connectError }
         if holdConnect { await withCheckedContinuation { pendingConnect = $0 } }
     }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await Task.sleep(nanoseconds: UInt64.max)
+        throw CancellationError()
+    }
     func send(text: String) async throws {
         if let sendError { throw sendError }
         sent.append(text)
@@ -359,5 +357,6 @@ private final class FakeTimer: CaptureTimer {
 @MainActor
 private final class FakePlayer: ConversationPlayer {
     var stops = 0
+    func play(pcm: Data) async throws {}
     func stop() { stops += 1 }
 }

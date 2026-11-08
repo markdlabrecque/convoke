@@ -158,6 +158,7 @@ private final class LocalWebSocketServer: @unchecked Sendable {
         }
     }
 
+    func play(pcm: Data) async throws {}
     func stop() {
         queue.sync {
             listener?.cancel()
@@ -242,6 +243,7 @@ private final class TransportTestTimer: CaptureTimer {
 
 @MainActor
 private final class TransportTestPlayer: ConversationPlayer {
+    func play(pcm: Data) async throws {}
     func stop() {}
 }
 #endif

@@ -120,6 +120,10 @@ private final class SpeechTestTransport: ConversationTransport {
     var onDisconnect: (() -> Void)?
     var sent: [String] = []
     func connect(to url: URL) async throws {}
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await Task.sleep(nanoseconds: UInt64.max)
+        throw CancellationError()
+    }
     func send(text: String) async throws { sent.append(text) }
     func disconnect() {}
 }
@@ -133,5 +137,6 @@ private final class SpeechTestTimer: CaptureTimer {
 
 @MainActor
 private final class SpeechTestPlayer: ConversationPlayer {
+    func play(pcm: Data) async throws {}
     func stop() {}
 }
