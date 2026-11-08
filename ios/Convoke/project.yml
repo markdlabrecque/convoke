@@ -1,0 +1,59 @@
+name: Convoke
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+packages:
+  ConvokeCore:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  Convoke:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: ConvokeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.convoke.app
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Convoke
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: Convoke records speech to send your recognized words to your configured server.
+        NSSpeechRecognitionUsageDescription: Convoke uses Apple speech recognition to transcribe your speech. Audio may be sent to Apple.
+        NSLocalNetworkUsageDescription: Convoke connects to your development server on your Mac.
+        NSAppTransportSecurity:
+          # Developer-only: arbitrary numeric Tailscale IPs must work on iOS 16.
+          # Do not add NSAllowsLocalNetworking alongside this key: its presence
+          # causes iOS 10+ to ignore NSAllowsArbitraryLoads.
+          NSAllowsArbitraryLoads: true
+  ConvokeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests, App/WebSocketTransport.swift, App/AppleSpeechCapture.swift]
+    dependencies:
+      - package: ConvokeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.convoke.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Convoke:
+    build:
+      targets:
+        Convoke: all
+        ConvokeTests: [test]
+    test:
+      targets: [ConvokeTests]
