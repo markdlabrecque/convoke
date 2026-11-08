@@ -1,0 +1,30 @@
+name: iOS
+
+on:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test session controller without microphone or server
+        working-directory: ios/Convoke
+        run: swift test
+      - name: Build app and iOS test target without signing
+        run: >-
+          xcodebuild -project ios/Convoke/Convoke.xcodeproj
+          -scheme Convoke -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build-for-testing

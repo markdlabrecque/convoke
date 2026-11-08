@@ -1,1 +1,8 @@
 node_modules/
+
+# Local Swift and Xcode build state
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
