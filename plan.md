@@ -4,6 +4,10 @@
 
 Convoke is an open-source system anyone can self-host for two-way voice conversations with a personal agent, starting with a minimal native iOS app. The phone does as much of the speech work as possible, which is free, so the server spends its resources on the agent itself. The server protocol stays open to other clients later, such as a browser on desktop.
 
+## Development workflow
+
+Linux is the primary development host. Use the Mac for Xcode builds, signing, and physical-iPhone testing. For the first spoken-echo slice, the server also runs on the Mac and uses a built-in macOS voice.
+
 ## Guiding principles
 
 - **On-device first:** speech-to-text (STT) runs on the iPhone. Text-to-speech (TTS) starts on the server with Kokoro, with the option to move it to the device later.
