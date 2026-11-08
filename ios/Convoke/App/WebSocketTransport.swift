@@ -62,8 +62,7 @@ final class WebSocketTransport: NSObject, ConversationTransport, URLSessionWebSo
         continuation?.resume(throwing: CancellationError())
     }
 
-    // The companion receive loop can use this without exposing URLSession to the controller.
-    // It must enforce the first-slice message ordering, audio and frame limits.
+    // The controller consumes one application frame at a time and validates the protocol.
     func receive() async throws -> URLSessionWebSocketTask.Message {
         guard socket != nil else { throw URLError(.notConnectedToInternet) }
         if !incoming.isEmpty {
@@ -84,7 +83,7 @@ final class WebSocketTransport: NSObject, ConversationTransport, URLSessionWebSo
     }
 
     // URLSession processes close/pong frames reliably only with a read pending.
-    // Preserve raw application frames for the companion task; do not parse them.
+    // Preserve raw application frames for the controller; do not parse them.
     private func readFrames(_ socket: URLSessionWebSocketTask) {
         reader = Task { @MainActor [weak self] in
             do {

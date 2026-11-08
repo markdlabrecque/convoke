@@ -1,4 +1,4 @@
-# iPhone speech capture
+# iPhone spoken echo
 
 Open `Convoke.xcodeproj` and use the shared `Convoke` scheme. The app supports iPhone on iOS 16+. There are no external package dependencies. The local `ConvokeCore` package contains the session controller and its tests.
 
@@ -17,7 +17,7 @@ xcodegen generate
 2. Tap Connect and wait for Ready. This means the WebSocket handshake completed, not just that a task was created.
 3. Tap Start recording. Allow speech recognition and microphone access. Apple recognition may send audio to Apple.
 4. Speak, then tap Submit recording. After 60 seconds of capture the app submits automatically. It ends audio input and waits up to five seconds for Apple's final result. It never sends a partial transcript as a substitute. Empty results are discarded; text over 4096 UTF-8 bytes is rejected.
-5. A successful send leaves the app in Waiting. This task deliberately has no response parsing or playback. Disconnect and reconnect to capture another turn until the companion playback task is integrated.
+5. A successful send leaves the app in Waiting while it buffers the response. After a valid `agent.done`, it plays the PCM through the speaker and shows Playing. Recording stays disabled until playback finishes and the app returns to Ready for another turn.
 
 If Apple ends recognition before Submit or the capture deadline, the app discards that interrupted turn and returns to Ready rather than silently stopping the microphone while still showing Recording.
 
@@ -54,11 +54,10 @@ xcodebuild -project Convoke.xcodeproj -scheme Convoke \
 
 Tests cover persistence, connection lifecycle and failures, state gating, JSON encoding, empty results, UTF-8 and frame limits, the capture deadline, cleanup, and late callbacks after disconnect. Controller tests use fakes. On macOS, localhost integration tests exercise the actual transport without an application receive, including remote close, missing pong, reconnection, cancellation, and raw-frame delivery. Adapter tests exercise premature recognition completion through the controller, final-result ordering, finalization cancellation, and deadlines without permissions or microphone access. The same adapter sources compile in the Swift package test target; only iOS audio-session configuration is conditional. Hardware permissions and actual recognition still need a physical-phone check.
 
-## Playback integration
+## Response playback
 
-- Keep the `WebSocketTransport` instance when constructing `SessionController` and use its `receive()` method in the companion response loop. The transport's raw-frame reader owns the URLSession read; the companion must not start another socket reader. Use one application `receive()` at a time. Disconnect cancels pending reads and discards queued frames.
-- Validate message type/order, frame size, audio sequence, chunk count, decoded chunk size, and accumulated audio against the shared first-slice contract before invoking response hooks. The transport caps incoming messages at 32768 bytes; that is not a substitute for protocol validation.
-- Supply a `ConversationPlayer` implementation. The controller calls `stop()` on disconnect. The receive/playback task owns starting playback and cancelling its receive work.
-- Call `responsePlaybackStarted()` when a Waiting response starts playing and `responseCompleted()` only after the turn's response has completed. Both Waiting and Playing block capture. Completion returns to Ready.
-- On malformed/unexpected input or a receive failure, call `disconnect()`. Cancel pending response work on disconnect and ignore callbacks from older connections.
-- Audio format is 24 kHz mono signed 16-bit little-endian PCM. Audio chunks are zero-based and limited to 16384 decoded bytes each, with at most 8 MiB accumulated audio. Playback and validation belong to the companion task, not this capture slice.
+The controller owns one receive loop over `ConversationTransport.receive()`. `WebSocketTransport` keeps ownership of the URLSession reader. The controller accepts `agent.text`, sequential zero-based `agent.audio` chunks, then a matching `agent.done`. Binary frames, malformed JSON, extra fields, invalid types/order, empty or unaligned PCM, and unsupported session states disconnect with a generic log. Frame, chunk, and total PCM limits are 32768 UTF-8 bytes, 16384 decoded bytes, and 8 MiB. Transcript contents and audio are never written to disk or logs.
+
+`ConversationPlayer.play(pcm:)` completes only after playback finishes. The app's `PCMPlayer` converts 24 kHz mono signed 16-bit little-endian PCM to an AVAudioPCMBuffer and schedules it on AVAudioPlayerNode using the played-back completion callback. Audio engine changes or audio-session interruptions fail the turn. Disconnect cancels receive/playback work, stops the player, and discards buffered response data. Manual Connect starts a fresh session, with no reconnect, resume, or barge-in.
+
+Response tests cover decoding and ordering, exact chunk and buffer limits, count mismatches, recording gating, repeated turns, playback failure, socket loss, disconnect cleanup, and stale completion after manual reconnect. Physical speaker output still requires the phone check described in the follow-up verification issue.

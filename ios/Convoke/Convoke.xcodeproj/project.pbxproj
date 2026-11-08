@@ -10,8 +10,12 @@
 		1632E0290685942727914045 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77F435D330DE97F5876C5F2 /* ContentView.swift */; };
 		1F9AC89823D0577DF44184FD /* ConvokeCore in Frameworks */ = {isa = PBXBuildFile; productRef = A29C095BDAEE7737F5B9CE22 /* ConvokeCore */; };
 		1FA96896D09265E4EBCEBD0F /* ConvokeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DADDCA74806C565F57E85F56 /* ConvokeApp.swift */; };
+		2098D0A9F7BA11A88742CA66 /* PCMPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9EBFDE2409AE1BB28823E1E /* PCMPlayerTests.swift */; };
 		3357818475188EE658978F4E /* ConvokeCore in Frameworks */ = {isa = PBXBuildFile; productRef = DA7D0C80FE8ED61B34CB0B06 /* ConvokeCore */; };
+		577E7405683DDAA5A42637EC /* ResponseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758274A0AF59EC9DBBC58744 /* ResponseTests.swift */; };
+		6D78E1853DD6113B331AB87E /* PCMPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 896C062D66ACDD5425BF3C1F /* PCMPlayer.swift */; };
 		6E2D94879CD9DEB2DAC82AA2 /* WebSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45726E1FA39D1B3A354B974E /* WebSocketTransport.swift */; };
+		7D2E78EDC0536BBE49E72021 /* PCMPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 896C062D66ACDD5425BF3C1F /* PCMPlayer.swift */; };
 		8FEFEB7DE1100450D492D702 /* WebSocketTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00099C33E2C80F9572039C1B /* WebSocketTransportTests.swift */; };
 		96A9769052F546BEA9B8CD8E /* AppleSpeechCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C6AC76E6E34020C00597677 /* AppleSpeechCapture.swift */; };
 		9B389F0F4C4EDCE35BC3CBA3 /* AppleSpeechCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F96532CCE73057002F3793 /* AppleSpeechCaptureTests.swift */; };
@@ -28,8 +32,11 @@
 		28F96532CCE73057002F3793 /* AppleSpeechCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechCaptureTests.swift; sourceTree = "<group>"; };
 		45726E1FA39D1B3A354B974E /* WebSocketTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketTransport.swift; sourceTree = "<group>"; };
 		483980FCE3A193B28987666C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		758274A0AF59EC9DBBC58744 /* ResponseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseTests.swift; sourceTree = "<group>"; };
+		896C062D66ACDD5425BF3C1F /* PCMPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMPlayer.swift; sourceTree = "<group>"; };
 		AA3B63EF4D8689E79B81B6A0 /* ConvokeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ConvokeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B77F435D330DE97F5876C5F2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B9EBFDE2409AE1BB28823E1E /* PCMPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMPlayerTests.swift; sourceTree = "<group>"; };
 		CF38E86B25A84937D9225947 /* Convoke.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Convoke.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DADDCA74806C565F57E85F56 /* ConvokeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvokeApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -67,6 +74,8 @@
 			isa = PBXGroup;
 			children = (
 				28F96532CCE73057002F3793 /* AppleSpeechCaptureTests.swift */,
+				B9EBFDE2409AE1BB28823E1E /* PCMPlayerTests.swift */,
+				758274A0AF59EC9DBBC58744 /* ResponseTests.swift */,
 				20BC25A36703BAE5B071560C /* SessionControllerTests.swift */,
 				00099C33E2C80F9572039C1B /* WebSocketTransportTests.swift */,
 			);
@@ -98,6 +107,7 @@
 				B77F435D330DE97F5876C5F2 /* ContentView.swift */,
 				DADDCA74806C565F57E85F56 /* ConvokeApp.swift */,
 				483980FCE3A193B28987666C /* Info.plist */,
+				896C062D66ACDD5425BF3C1F /* PCMPlayer.swift */,
 				45726E1FA39D1B3A354B974E /* WebSocketTransport.swift */,
 			);
 			path = App;
@@ -194,6 +204,7 @@
 				96A9769052F546BEA9B8CD8E /* AppleSpeechCapture.swift in Sources */,
 				1632E0290685942727914045 /* ContentView.swift in Sources */,
 				1FA96896D09265E4EBCEBD0F /* ConvokeApp.swift in Sources */,
+				6D78E1853DD6113B331AB87E /* PCMPlayer.swift in Sources */,
 				C8B1241E8FEDB2827C4D808B /* WebSocketTransport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -204,6 +215,9 @@
 			files = (
 				D285C84853D92A5A0523D6BB /* AppleSpeechCapture.swift in Sources */,
 				9B389F0F4C4EDCE35BC3CBA3 /* AppleSpeechCaptureTests.swift in Sources */,
+				7D2E78EDC0536BBE49E72021 /* PCMPlayer.swift in Sources */,
+				2098D0A9F7BA11A88742CA66 /* PCMPlayerTests.swift in Sources */,
+				577E7405683DDAA5A42637EC /* ResponseTests.swift in Sources */,
 				9C9C53076C06C2D12A26F7D9 /* SessionControllerTests.swift in Sources */,
 				6E2D94879CD9DEB2DAC82AA2 /* WebSocketTransport.swift in Sources */,
 				8FEFEB7DE1100450D492D702 /* WebSocketTransportTests.swift in Sources */,

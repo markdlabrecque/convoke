@@ -5,6 +5,7 @@ import Foundation
 public protocol ConversationTransport: AnyObject {
     var onDisconnect: (() -> Void)? { get set }
     func connect(to url: URL) async throws
+    func receive() async throws -> URLSessionWebSocketTask.Message
     func send(text: String) async throws
     func disconnect()
 }
@@ -24,9 +25,10 @@ public protocol CaptureTimer: AnyObject {
     func cancel()
 }
 
-/// The playback task supplies its player and drives the response hooks below.
+/// Plays in-memory 24 kHz mono signed 16-bit little-endian PCM.
 @MainActor
 public protocol ConversationPlayer: AnyObject {
+    func play(pcm: Data) async throws
     func stop()
 }
 
@@ -52,6 +54,9 @@ public final class SessionController: ObservableObject {
     private let log: (String) -> Void
     private var connectionID = UUID()
     private var captureID: UUID?
+    private var receiver: Task<Void, Never>?
+    private var playback: Task<Void, Never>?
+    private var response = ResponseAccumulator()
 
     public init(defaults: UserDefaults = .standard, transport: ConversationTransport,
                 recognition: SpeechCapture, timer: CaptureTimer, player: ConversationPlayer,
@@ -82,6 +87,7 @@ public final class SessionController: ObservableObject {
             try await transport.connect(to: url)
             guard connectionID == id else { return }
             state = .ready
+            startReceiving(connection: id)
         } catch {
             guard connectionID == id else { return }
             log("WebSocket connection failed")
@@ -91,6 +97,11 @@ public final class SessionController: ObservableObject {
 
     public func disconnect() {
         connectionID = UUID()
+        receiver?.cancel()
+        receiver = nil
+        playback?.cancel()
+        playback = nil
+        response = ResponseAccumulator()
         captureID = nil
         isFinalizing = false
         state = .disconnected
@@ -181,16 +192,37 @@ public final class SessionController: ObservableObject {
         }
     }
 
-    // Receive-loop hooks. The caller must validate the server protocol and call
-    // disconnect() for malformed/unexpected frames. No receive loop lives here.
-    public func responsePlaybackStarted() {
-        guard state == .waiting else { return }
-        state = .playing
-    }
-
-    public func responseCompleted() {
-        guard state == .waiting || state == .playing else { return }
-        state = .ready
+    private func startReceiving(connection: UUID) {
+        receiver = Task { @MainActor [weak self, transport] in
+            do {
+                while !Task.isCancelled {
+                    let frame = try await transport.receive()
+                    guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                    guard self.state == .waiting else { throw ResponseError.invalid }
+                    if let pcm = try self.response.consume(frame) {
+                        self.response = ResponseAccumulator()
+                        self.state = .playing
+                        self.playback = Task { @MainActor [weak self, player = self.player] in
+                            guard !Task.isCancelled, self?.connectionID == connection else { return }
+                            do {
+                                try await player.play(pcm: pcm)
+                                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                                self.playback = nil
+                                self.state = .ready
+                            } catch {
+                                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                                self.log("Audio playback failed")
+                                self.disconnect()
+                            }
+                        }
+                    }
+                }
+            } catch {
+                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                self.log("WebSocket receive or response validation failed")
+                self.disconnect()
+            }
+        }
     }
 }
 

@@ -12,7 +12,7 @@ let package = Package(
             exclude: ["Core", "App/ContentView.swift",
                       "App/ConvokeApp.swift", "App/Info.plist", "Convoke.xcodeproj",
                       "README.md", "project.yml"],
-            sources: ["Tests", "App/WebSocketTransport.swift", "App/AppleSpeechCapture.swift"]
+            sources: ["Tests", "App/WebSocketTransport.swift", "App/AppleSpeechCapture.swift", "App/PCMPlayer.swift"]
         )
     ]
 )
