@@ -298,6 +298,46 @@ final class ConversationTests: XCTestCase {
     }
 #endif
 
+    // Opt-in: needs a running Kokoro sidecar, e.g. CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880.
+    // Prints sizes and timings only; audio is neither saved nor logged.
+    func testKokoroSidecarSmoke() async throws {
+        guard let url = ProcessInfo.processInfo.environment["CONVOKE_TEST_KOKORO_URL"] else {
+            throw XCTSkip("Set CONVOKE_TEST_KOKORO_URL to exercise a real Kokoro sidecar")
+        }
+        setenv("CONVOKE_KOKORO_URL", url, 1)
+        defer { unsetenv("CONVOKE_KOKORO_URL") }
+        try await withServer(timeout: .seconds(60)) { socket in
+            let wire = try await WireClient.connect(socket)
+            let start = ContinuousClock.now
+            try await wire.send(self.userText("Testing one two three."))
+            let reply = try await wire.next()
+            XCTAssertEqual(reply["type"] as? String, "agent.text")
+            var firstChunk: Duration?
+            var bytes = 0, chunks = 0
+            var nonSilent = false
+            while true {
+                let frame = try await wire.next()
+                if frame["type"] as? String == "agent.done" {
+                    XCTAssertEqual(frame["chunks"] as? Int, chunks)
+                    break
+                }
+                XCTAssertEqual(frame["type"] as? String, "agent.audio")
+                XCTAssertEqual(frame["sequence"] as? Int, chunks)
+                if firstChunk == nil { firstChunk = ContinuousClock.now - start }
+                let chunk = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
+                XCTAssertLessThanOrEqual(chunk.count, 16384)
+                nonSilent = nonSilent || chunk.contains { $0 != 0 }
+                bytes += chunk.count
+                chunks += 1
+            }
+            let total = ContinuousClock.now - start
+            XCTAssertTrue(nonSilent)
+            XCTAssertTrue(bytes.isMultiple(of: 2))
+            XCTAssertGreaterThan(chunks, 1, "A sentence is more than one 16 KiB chunk")
+            print("KOKORO-SMOKE bytes=\(bytes) audioSeconds=\(Double(bytes) / 48_000) chunks=\(chunks) firstChunk=\(firstChunk!) total=\(total)")
+        }
+    }
+
     private func userText(_ text: String) throws -> String {
         String(decoding: try JSONSerialization.data(withJSONObject: ["type": "user.text", "text": text]), as: UTF8.self)
     }
@@ -326,7 +366,7 @@ final class ConversationTests: XCTestCase {
     private func withServer(
         timeout: TimeAmount = .seconds(10),
         agent: any Agent = EchoTestAgent(),
-        synthesize: @escaping Conversation.Synthesize,
+        synthesize: Conversation.Synthesize? = nil,
         body: (URLSessionWebSocketTask) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)

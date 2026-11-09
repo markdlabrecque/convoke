@@ -83,6 +83,8 @@ On a Mac, run `swift build` first: it is the only check that compiles the macOS 
 cd server
 swift build
 swift test
+# Also exercise a running Kokoro sidecar over a local WebSocket (sizes and timings only):
+CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 swift test --filter testKokoroSidecarSmoke
 # Also exercise the installed voice over a local WebSocket for two turns:
 CONVOKE_TEST_SYSTEM_VOICE=1 swift test
 ```
