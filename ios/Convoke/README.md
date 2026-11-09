@@ -1,6 +1,6 @@
 # iPhone spoken echo
 
-Open `Convoke.xcodeproj` and use the shared `Convoke` scheme. The app supports iPhone on iOS 16+. There are no external package dependencies. The local `ConvokeCore` package contains the session controller and its tests.
+Open `Convoke.xcodeproj` and use the shared `Convoke` scheme. The app supports iPhone on iOS 26+. There are no external package dependencies. The local `ConvokeCore` package contains the session controller and its tests.
 
 For a physical phone, select your development team under Signing & Capabilities, choose the phone as the run destination, and run. Signing settings are intentionally not tied to a developer account.
 
@@ -27,7 +27,7 @@ The transport keeps a raw WebSocket read pending so URLSession processes remote 
 
 Disconnect discards capture, cancels timers and transport monitoring, clears buffered frames, stops the player, and closes the socket. Backgrounding the app does the same. The app never reconnects automatically. Permission or recognition failures return a connected session to Ready and write a generic developer log without transcript contents. Change denied permissions in iOS Settings before retrying.
 
-The app has no bearer token or application authentication. Use only a trusted development network and enforce access controls on the Mac. The developer-configured numeric IP requires a cleartext ATS allowance on iOS 16, so this developer app includes `NSAllowsArbitraryLoads`. Do not add `NSAllowsLocalNetworking` alongside it, because on iOS 10+ that key causes the arbitrary-loads exception to be ignored. Do not carry the broad exception into a production release. Transcript text is held in memory for recognition and sending, not stored by the app or written to its logs.
+The app has no bearer token or application authentication. Use only a trusted development network and enforce access controls on the Mac. The developer-configured numeric IP requires a cleartext ATS allowance, so this developer app includes `NSAllowsArbitraryLoads`. Do not add `NSAllowsLocalNetworking` alongside it, because on iOS 10+ that key causes the arbitrary-loads exception to be ignored. Do not carry the broad exception into a production release. Transcript text is held in memory for recognition and sending, not stored by the app or written to its logs.
 
 ## Tests and builds
 
