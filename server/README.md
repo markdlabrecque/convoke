@@ -54,7 +54,7 @@ export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
 docker stop convoke-kokoro          # when done
 ```
 
-The same command works on a Mac (Docker Desktop, Apple Silicon runs the CPU image under emulation or natively if available). If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn; there is no fallback to another voice.
+The same command works on a Mac. If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn; there is no fallback to another voice.
 
 ## Internal exchange
 
