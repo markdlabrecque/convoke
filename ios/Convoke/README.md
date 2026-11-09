@@ -11,6 +11,8 @@ cd ios/Convoke
 xcodegen generate
 ```
 
+For the complete Mac/Tailscale setup, recorded automated results, and physical-iPhone acceptance checklist, see [developer setup and verification](../../docs/development.md).
+
 ## Capture flow
 
 1. Enter `ws://<Mac Tailscale IP>:8080/conversation`, replacing the placeholder with the Mac's numeric Tailscale IP. The URL is the only app setting saved to UserDefaults.

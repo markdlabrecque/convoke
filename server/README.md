@@ -2,6 +2,8 @@
 
 This implements `docs/first-slice.md`, not the later agent/Kokoro design in `plan.md`.
 
+For the complete iPhone/Tailscale setup, recorded automated results, and physical-device checklist, see [developer setup and verification](../docs/development.md).
+
 ## Run
 
 Use a Mac running macOS 13 or later, with an installed system speech voice and Swift 6.4 or later. The committed dependency resolution currently requires Swift 6.4.
