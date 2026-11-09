@@ -1,8 +1,9 @@
+#if canImport(AVFoundation)
 import AVFoundation
 import Foundation
 
 @MainActor
-final class MacSpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
+final class MacSpeechSynthesizer: NSObject, SpeechSynthesizer, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     private let accumulator = SpeechAudioAccumulator()
     private var continuation: CheckedContinuation<Data, Error>?
@@ -139,3 +140,4 @@ final class SpeechAudioAccumulator: @unchecked Sendable {
         }
     }
 }
+#endif

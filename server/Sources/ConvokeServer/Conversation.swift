@@ -3,7 +3,7 @@ import Vapor
 import NIOCore
 
 enum ConversationError: Error {
-    case invalidMessage, invalidAudio, audioLimit, synthesisFailed
+    case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer
 }
 
 enum ConversationProtocol {
@@ -157,7 +157,7 @@ final class Conversation: @unchecked Sendable {
 func configure(
     _ app: Application,
     turnTimeout: TimeAmount = .seconds(120),
-    synthesize: @escaping Conversation.Synthesize = { try await MacSpeechSynthesizer().synthesize($0) }
+    synthesize: @escaping Conversation.Synthesize = { try await makePlatformSpeechSynthesizer().synthesize($0) }
 ) throws {
     app.http.server.configuration.hostname = "0.0.0.0"
     if let value = Environment.get("PORT") {

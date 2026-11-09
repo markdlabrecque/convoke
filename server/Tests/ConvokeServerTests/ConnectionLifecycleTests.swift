@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 import XCTest
 import Vapor
 import NIOCore
@@ -193,29 +197,49 @@ private final class StalledWrites: ChannelOutboundHandler, ChannelInboundHandler
     }
 }
 
+// Thin wrappers keep the raw socket code portable between Darwin and Glibc.
+#if canImport(Darwin)
+private let sysConnect = Darwin.connect
+private let sysClose = Darwin.close
+private func sysRecv(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> Int { Darwin.recv(fd, buffer, count, 0) }
+private func sysSend(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int { Darwin.send(fd, buffer, count, 0) }
+#else
+private let sysConnect = Glibc.connect
+private let sysClose = Glibc.close
+private func sysRecv(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> Int { Glibc.recv(fd, buffer, count, 0) }
+// MSG_NOSIGNAL replaces SO_NOSIGPIPE, which Linux lacks.
+private func sysSend(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int { Glibc.send(fd, buffer, count, Int32(MSG_NOSIGNAL)) }
+#endif
+
 // A raw TCP peer intentionally has no automatic WebSocket close acknowledgment.
 // All reads have a socket-level timeout so regressions fail rather than hang.
 private final class RawPeer {
     private var descriptor: Int32 = -1
 
     init(port: Int) throws {
+#if canImport(Darwin)
         descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+#else
+        descriptor = Glibc.socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+#endif
         guard descriptor >= 0 else { throw POSIXError(.EIO) }
         do {
             var timeout = timeval(tv_sec: 3, tv_usec: 0)
             guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 else {
                 throw POSIXError(.EIO)
             }
+            var address = sockaddr_in()
+#if canImport(Darwin)
             var noSigPipe: Int32 = 1
             _ = setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
-            var address = sockaddr_in()
             address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+#endif
             address.sin_family = sa_family_t(AF_INET)
             address.sin_port = UInt16(port).bigEndian
             address.sin_addr.s_addr = inet_addr("127.0.0.1")
             let result = withUnsafePointer(to: &address) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    sysConnect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
             guard result == 0 else { throw POSIXError(.ECONNREFUSED) }
@@ -233,7 +257,7 @@ private final class RawPeer {
     deinit { close() }
 
     func close() {
-        if descriptor >= 0 { Darwin.close(descriptor); descriptor = -1 }
+        if descriptor >= 0 { sysClose(descriptor); descriptor = -1 }
     }
 
     func send(text: String, opcode: UInt8 = 1, fin: Bool = true, masked: Bool = true, reserved: UInt8 = 0) throws {
@@ -258,7 +282,7 @@ private final class RawPeer {
 
     func read(upTo count: Int) throws -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
-        let result = Darwin.recv(descriptor, &bytes, count, 0)
+        let result = sysRecv(descriptor, &bytes, count)
         guard result >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         return Data(bytes.prefix(result))
     }
@@ -277,7 +301,7 @@ private final class RawPeer {
         try data.withUnsafeBytes { bytes in
             var offset = 0
             while offset < bytes.count {
-                let written = Darwin.send(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+                let written = sysSend(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
                 guard written > 0 else { throw POSIXError(.EIO) }
                 offset += written
             }
