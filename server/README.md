@@ -1,8 +1,6 @@
 # Mac spoken-echo server
 
-This implements `docs/first-slice.md`, not the later agent/Kokoro design in `plan.md`.
-
-For the complete iPhone/Tailscale setup, recorded automated results, and physical-device checklist, see [developer setup and verification](../docs/development.md).
+This implements the spoken-echo first slice (`first-slice.md` in the work root), not the later agent/Kokoro design in `plan.md`. The setup and verification guide is `development.md` in the same work root.
 
 ## Run
 
@@ -18,6 +16,10 @@ PORT=9090 swift run ConvokeServer serve
 Connect to `ws://<Mac-Tailscale-address>:8080/conversation`.
 
 The server binds `0.0.0.0` and has **no application authentication or TLS**. Restrict access with the Mac's firewall and tailnet ACLs. Tailscale does not protect other reachable interfaces. Do not expose this server to untrusted networks.
+
+## Linux
+
+The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Only macOS has a synthesizer today, so on Linux each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. Two chunked-audio tests are skipped on Linux because its `URLSessionWebSocketTask` truncates large messages.
 
 ## Internal exchange
 

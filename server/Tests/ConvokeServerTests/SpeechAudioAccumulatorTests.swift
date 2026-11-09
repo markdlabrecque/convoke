@@ -1,3 +1,4 @@
+#if canImport(AVFoundation)
 import AVFoundation
 import XCTest
 @testable import ConvokeServer
@@ -61,3 +62,4 @@ final class SpeechAudioAccumulatorTests: XCTestCase {
         }
     }
 }
+#endif

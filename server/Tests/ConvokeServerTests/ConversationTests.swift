@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Vapor
 import NIOCore
 import NIOPosix
@@ -37,6 +40,11 @@ final class ConversationTests: XCTestCase {
     }
 
     func testSequentialTurnsAndChunkCounts() async throws {
+        #if os(Linux)
+        // swift-corelibs URLSessionWebSocketTask hands back messages cut at ~16 KiB, so
+        // multi-chunk audio frames cannot be read by this client on Linux.
+        throw XCTSkip("URLSessionWebSocketTask truncates large messages on Linux")
+        #endif
         let audio = Data((0..<40_002).map { UInt8($0 % 251) })
         try await withServer(synthesize: { text in
             XCTAssertTrue(text.hasPrefix("You said: "))
@@ -66,6 +74,11 @@ final class ConversationTests: XCTestCase {
     }
 
     func testExactChunkAndAudioCapCompletionCounts() async throws {
+        #if os(Linux)
+        // swift-corelibs URLSessionWebSocketTask hands back messages cut at ~16 KiB, so
+        // multi-chunk audio frames cannot be read by this client on Linux.
+        throw XCTSkip("URLSessionWebSocketTask truncates large messages on Linux")
+        #endif
         for size in [2, 16_384, ConversationProtocol.maxAudioBytes] {
             try await withServer(synthesize: { _ in Data(repeating: 42, count: size) }) { socket in
                 try await socket.send(.string(self.userText("boundary")))
@@ -167,6 +180,7 @@ final class ConversationTests: XCTestCase {
     func testSynthesisFailuresCloseConnection() async throws {
         let synthesizers: [Conversation.Synthesize] = [
             { _ in throw ConversationError.synthesisFailed },
+            { try await UnavailableSpeechSynthesizer().synthesize($0) },
             { _ in Data() }, { _ in Data([1]) },
             { _ in Data(repeating: 0, count: ConversationProtocol.maxAudioBytes + 2) },
         ]
@@ -228,6 +242,7 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+#if canImport(AVFoundation)
     // Explicit opt-in: normal tests need neither installed voices nor audio hardware.
     func testSystemVoiceSmoke() async throws {
         guard ProcessInfo.processInfo.environment["CONVOKE_TEST_SYSTEM_VOICE"] == "1" else {
@@ -258,6 +273,7 @@ final class ConversationTests: XCTestCase {
             }
         }
     }
+#endif
 
     private func userText(_ text: String) throws -> String {
         String(decoding: try JSONSerialization.data(withJSONObject: ["type": "user.text", "text": text]), as: UTF8.self)
