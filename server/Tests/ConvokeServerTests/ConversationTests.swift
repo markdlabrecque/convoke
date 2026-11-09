@@ -212,6 +212,7 @@ final class ConversationTests: XCTestCase {
                 let text = try await self.receive(socket)
                 XCTAssertEqual(text["type"] as? String, "agent.text")
                 await self.assertClosed(socket)
+                XCTAssertEqual(socket.closeCode, .internalServerError, "Server-side speech failure closes with 1011")
             }
         }
     }

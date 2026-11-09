@@ -28,12 +28,13 @@ final class KokoroTests: XCTestCase {
     }
 
     @MainActor func testErrorsAreThrownNotSwallowed() async throws {
-        let cases: [(HTTPStatus, Data)] = [
-            (.internalServerError, Data([0, 0])), (.ok, Data()), (.ok, Data([1, 2, 3])),
+        let cases: [(HTTPStatus, Data, String)] = [
+            (.internalServerError, Data([0, 0]), "audio/pcm"), (.ok, Data(), "audio/pcm"), (.ok, Data([1, 2, 3]), "audio/pcm"),
+            (.ok, Data([0, 0]), "audio/mpeg"), (.ok, Data([0, 0]), "audio/wav"),
         ]
-        for (status, body) in cases {
+        for (status, body, type) in cases {
             do {
-                _ = try await withStub(Stub(), status: status, body: body) { try await $0.synthesize("x") }
+                _ = try await withStub(Stub(), status: status, body: body, type: type) { try await $0.synthesize("x") }
                 XCTFail("Expected an error for \(status) with \(body.count) bytes")
             } catch is SpeechError {}
         }
@@ -42,14 +43,14 @@ final class KokoroTests: XCTestCase {
     final class Stub: @unchecked Sendable { var path = "", body = "" }
 
     @MainActor private func withStub(
-        _ stub: Stub, status: HTTPStatus, body: Data, _ run: (KokoroSpeechSynthesizer) async throws -> Data
+        _ stub: Stub, status: HTTPStatus, body: Data, type: String = "audio/pcm", _ run: (KokoroSpeechSynthesizer) async throws -> Data
     ) async throws -> Data {
         let app = try await Application.make(.testing)
         do {
             app.post("v1", "audio", "speech") { request -> Response in
                 stub.path = request.url.path
                 stub.body = request.body.string ?? ""
-                return Response(status: status, body: .init(data: body))
+                return Response(status: status, headers: ["content-type": type], body: .init(data: body))
             }
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)

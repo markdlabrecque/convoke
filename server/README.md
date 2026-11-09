@@ -34,7 +34,7 @@ The server binds `0.0.0.0` and has **no application authentication or TLS**. Res
 
 ## Linux
 
-The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Only macOS has a synthesizer today, so on Linux each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. The chunked-audio tests read frames with WebSocketKit's client, because Linux's `URLSessionWebSocketTask` truncates large messages.
+The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Without Kokoro, only macOS has a synthesizer, so on Linux (unless `CONVOKE_KOKORO_URL` is set) each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. The chunked-audio tests read frames with WebSocketKit's client, because Linux's `URLSessionWebSocketTask` truncates large messages.
 
 ## Kokoro speech (optional sidecar)
 
@@ -48,13 +48,13 @@ Set `CONVOKE_KOKORO_URL` and the server speaks with [Kokoro](https://github.com/
 Run the CPU sidecar in Docker, bound to this machine only. The server has no authentication, and neither does the sidecar, so never publish its port beyond `127.0.0.1`:
 
 ```sh
-docker run -d --rm --name convoke-kokoro -p 127.0.0.1:8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+docker run -d --rm --name convoke-kokoro -p 127.0.0.1:8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.10.0
 curl http://127.0.0.1:8880/health   # wait for {"status":"healthy"}
 export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
 docker stop convoke-kokoro          # when done
 ```
 
-The same command works on a Mac. If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn; there is no fallback to another voice.
+The same command works on a Mac. If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn with WebSocket code 1011 (server error); there is no fallback to another voice. The sidecar must answer with an `audio/pcm` content type; anything else (MP3, WAV) is rejected.
 
 ## Internal exchange
 

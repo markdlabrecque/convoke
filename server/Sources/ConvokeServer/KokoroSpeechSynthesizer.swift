@@ -51,12 +51,17 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         var stream = false
     }
 
+    private static let pcmTypes: Set<String> = ["audio/pcm", "audio/l16", "audio/x-pcm"]
+
     @MainActor func synthesize(_ text: String) async throws -> Data {
         let body = Request(input: text, voice: config.voice)
         let response = try await client.post(URI(string: config.baseURL + "/v1/audio/speech")) {
             try $0.content.encode(body, as: .json)
         }
         guard response.status == .ok else { throw SpeechError.http(status: response.status.code) }
+        // An old image or another server may ignore response_format and send MP3 or WAV.
+        let type = response.headers.first(name: .contentType)?.lowercased().split(separator: ";").first.map(String.init) ?? "none"
+        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type \(type) is not raw PCM") }
         guard var buffer = response.body else { throw SpeechError.badResponse("empty body") }
         let audio = buffer.readData(length: buffer.readableBytes) ?? Data()
         do { try ConversationProtocol.validateAudio(audio) }

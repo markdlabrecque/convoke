@@ -149,10 +149,12 @@ final class Conversation: @unchecked Sendable {
                 self.socket.eventLoop.execute { self.sendAudio(audio) }
             } catch {
                 // Reasons carry status codes and types only, never text or audio.
-                if !(error is CancellationError) {
+                if error is CancellationError {
+                    self.socket.eventLoop.execute { self.close() }
+                } else {
                     self.logger.error("Speech synthesis failed", metadata: ["reason": "\(error)"])
+                    self.socket.eventLoop.execute { self.fail() }
                 }
-                self.socket.eventLoop.execute { self.close() }
             }
         }
     }
@@ -163,7 +165,10 @@ final class Conversation: @unchecked Sendable {
         do {
             try ConversationProtocol.validateAudio(audio)
             sendChunk(audio, offset: 0, sequence: 0)
-        } catch { close() }
+        } catch {
+            logger.error("Synthesized audio rejected", metadata: ["reason": "\(error)", "audioBytes": "\(audio.count)"])
+            fail()
+        }
     }
 
     private func sendChunk(_ audio: Data, offset: Int, sequence: Int) {
