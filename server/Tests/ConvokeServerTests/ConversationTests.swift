@@ -8,9 +8,14 @@ import NIOPosix
 import WebSocketKit
 @testable import ConvokeServer
 
+/// Stands in for the model: replies "You said: <last user message>".
+struct EchoTestAgent: Agent {
+    func reply(to history: [ChatMessage]) async throws -> String { "You said: " + (history.last?.content ?? "") }
+}
+
 final class ConversationTests: XCTestCase {
     func testPrefixAndTrimmedUTF8Limit() throws {
-        XCTAssertEqual(try reply(" \n hello 🌍 \t"), "You said: hello 🌍")
+        XCTAssertEqual(try reply(" \n hello 🌍 \t"), "hello 🌍")
         XCTAssertNoThrow(try reply(String(repeating: "é", count: 2048)))
         XCTAssertThrowsError(try reply(String(repeating: "é", count: 2049)))
         for text in ["", " \n\t "] { XCTAssertThrowsError(try reply(text)) }
@@ -20,15 +25,15 @@ final class ConversationTests: XCTestCase {
         for frame in ["no", "null", "[]", "{}", "{\"type\":\"agent.done\"}",
                       "{\"type\":\"user.text\",\"text\":42}",
                       "{\"type\":\"user.text\",\"text\":\"a\",\"extra\":true}"] {
-            XCTAssertThrowsError(try ConversationProtocol.reply(to: frame))
+            XCTAssertThrowsError(try ConversationProtocol.userText(from: frame))
         }
     }
 
     func testFrameByteBoundary() throws {
         let frame = try userText("a")
         let boundary = frame + String(repeating: " ", count: ConversationProtocol.maxFrameBytes - frame.utf8.count)
-        XCTAssertEqual(try ConversationProtocol.reply(to: boundary), "You said: a")
-        XCTAssertThrowsError(try ConversationProtocol.reply(to: boundary + " "))
+        XCTAssertEqual(try ConversationProtocol.userText(from: boundary), "a")
+        XCTAssertThrowsError(try ConversationProtocol.userText(from: boundary + " "))
         XCTAssertThrowsError(try ConversationProtocol.json(["text": String(repeating: "x", count: 32768)]))
     }
 
@@ -177,6 +182,31 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+    func testHistoryGrowsPerConnectionAndFailureClosesLoudly() async throws {
+        final class Recorder: Agent, @unchecked Sendable {
+            let lock = NSLock()
+            var seen: [[ChatMessage]] = []
+            func reply(to history: [ChatMessage]) async throws -> String {
+                lock.lock(); seen.append(history); let n = seen.count; lock.unlock()
+                if history.last?.content == "boom" { throw AgentError.http(status: 500) }
+                return "reply \(n)"
+            }
+        }
+        let recorder = Recorder()
+        try await withServer(agent: recorder, synthesize: { _ in Data([0, 0]) }) { socket in
+            for word in ["one", "two"] {
+                try await socket.send(.string(self.userText(word)))
+                _ = try await self.receive(socket)
+                while try await self.receive(socket)["type"] as? String != "agent.done" {}
+            }
+            XCTAssertEqual(recorder.seen[1].map(\.content), ["one", "reply 1", "two"])
+            XCTAssertEqual(recorder.seen[1].map(\.role), [.user, .assistant, .user])
+            try await socket.send(.string(self.userText("boom")))
+            await self.assertClosed(socket)
+            XCTAssertEqual(socket.closeCode, .internalServerError)
+        }
+    }
+
     func testSynthesisFailuresCloseConnection() async throws {
         let synthesizers: [Conversation.Synthesize] = [
             { _ in throw ConversationError.synthesisFailed },
@@ -280,7 +310,7 @@ final class ConversationTests: XCTestCase {
     }
 
     private func reply(_ text: String) throws -> String {
-        try ConversationProtocol.reply(to: userText(text))
+        try ConversationProtocol.userText(from: userText(text))
     }
 
     private func receive(_ socket: URLSessionWebSocketTask) async throws -> [String: Any] {
@@ -302,12 +332,13 @@ final class ConversationTests: XCTestCase {
 
     private func withServer(
         timeout: TimeAmount = .seconds(10),
+        agent: any Agent = EchoTestAgent(),
         synthesize: @escaping Conversation.Synthesize,
         body: (URLSessionWebSocketTask) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)
         do {
-            try configure(app, turnTimeout: timeout, synthesize: synthesize)
+            try configure(app, turnTimeout: timeout, synthesize: synthesize, agent: agent)
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let session = URLSession(configuration: .ephemeral)

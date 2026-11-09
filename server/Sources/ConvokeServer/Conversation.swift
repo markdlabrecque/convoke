@@ -3,7 +3,7 @@ import Vapor
 import NIOCore
 
 enum ConversationError: Error {
-    case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer
+    case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer, replyTooLarge
 }
 
 enum ConversationProtocol {
@@ -12,7 +12,8 @@ enum ConversationProtocol {
     static let maxChunkBytes = 16_384
     static let maxAudioBytes = 8 * 1_024 * 1_024
 
-    static func reply(to frame: String) throws -> String {
+    /// Validates a `user.text` frame and returns its trimmed text.
+    static func userText(from frame: String) throws -> String {
         guard frame.utf8.count <= maxFrameBytes,
               let object = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? [String: Any],
               Set(object.keys) == ["type", "text"],
@@ -24,7 +25,7 @@ enum ConversationProtocol {
         guard !trimmed.isEmpty, trimmed.utf8.count <= maxTextBytes else {
             throw ConversationError.invalidMessage
         }
-        return "You said: " + trimmed
+        return trimmed
     }
 
     static func json(_ object: [String: Any]) throws -> String {
@@ -47,13 +48,25 @@ final class Conversation: @unchecked Sendable {
     private var state = State.idle
     private let socket: WebSocket
     private let synthesize: Synthesize
+    private let agent: any Agent
+    private let logger: Logger
     private let timeout: TimeAmount
+    // Per-connection history, touched only on the socket's event loop. Never persisted.
+    private var history: [ChatMessage] = []
+    private static let maxHistoryMessages = 40
+    private var agentTurn: Task<Void, Never>?
     private var synthesis: Task<Void, Never>?
     private var deadline: Scheduled<Void>?
 
-    init(socket: WebSocket, timeout: TimeAmount, synthesize: @escaping Synthesize) {
+    init(
+        socket: WebSocket, timeout: TimeAmount, agent: any Agent,
+        logger: Logger = Logger(label: "convoke.conversation"),
+        synthesize: @escaping Synthesize
+    ) {
         self.socket = socket
         self.timeout = timeout
+        self.agent = agent
+        self.logger = logger
         self.synthesize = synthesize
         socket.onText { [weak self] _, text in self?.receive(text) }
         socket.onBinary { [weak self] _, _ in self?.close() }
@@ -66,10 +79,34 @@ final class Conversation: @unchecked Sendable {
         socket.eventLoop.preconditionInEventLoop()
         guard state == .idle else { close(); return }
         do {
-            let reply = try ConversationProtocol.reply(to: frame)
+            let userText = try ConversationProtocol.userText(from: frame)
             state = .active
             deadline = socket.eventLoop.scheduleTask(in: timeout) { self.close() }
+            history.append(ChatMessage(role: .user, content: userText))
+            if history.count > Self.maxHistoryMessages {
+                history.removeFirst(history.count - Self.maxHistoryMessages)
+            }
+            let snapshot = history
+            logger.info("Turn started", metadata: ["userBytes": "\(userText.utf8.count)", "historyMessages": "\(snapshot.count)"])
+            agentTurn = Task { [agent] in
+                do {
+                    let reply = try await agent.reply(to: snapshot)
+                    try Task.checkCancellation()
+                    self.socket.eventLoop.execute { self.deliver(reply) }
+                } catch {
+                    self.socket.eventLoop.execute { self.agentFailed(error) }
+                }
+            }
+        } catch { close() }
+    }
+
+    private func deliver(_ reply: String) {
+        guard state == .active else { return }
+        agentTurn = nil
+        do {
             let text = try ConversationProtocol.json(["type": "agent.text", "text": reply])
+            history.append(ChatMessage(role: .assistant, content: reply))
+            logger.info("Agent replied", metadata: ["replyBytes": "\(reply.utf8.count)"])
             send(text).whenComplete { result in
                 guard self.state == .active else { return }
                 switch result {
@@ -77,7 +114,25 @@ final class Conversation: @unchecked Sendable {
                 case .success: self.startSynthesis(reply)
                 }
             }
-        } catch { close() }
+        } catch {
+            logger.error("Agent reply cannot be sent", metadata: ["replyBytes": "\(reply.utf8.count)", "error": "\(type(of: error))"])
+            fail()
+        }
+    }
+
+    private func agentFailed(_ error: Error) {
+        guard state == .active else { return }
+        agentTurn = nil
+        if error is CancellationError { return close() }
+        // Error descriptions carry status codes and types only, never message text.
+        logger.error("Agent request failed", metadata: ["reason": "\(error)"])
+        fail()
+    }
+
+    // Tell the client the server failed (close code 1011), not that it broke a rule.
+    private func fail() {
+        disconnected()
+        socket.close(code: .unexpectedServerError, promise: nil)
     }
 
     private func startSynthesis(_ reply: String) {
@@ -144,6 +199,8 @@ final class Conversation: @unchecked Sendable {
         state = .closed
         deadline?.cancel()
         deadline = nil
+        agentTurn?.cancel()
+        agentTurn = nil
         synthesis?.cancel()
         synthesis = nil
     }
@@ -157,8 +214,13 @@ final class Conversation: @unchecked Sendable {
 func configure(
     _ app: Application,
     turnTimeout: TimeAmount = .seconds(120),
-    synthesize: @escaping Conversation.Synthesize = { try await makePlatformSpeechSynthesizer().synthesize($0) }
+    synthesize: @escaping Conversation.Synthesize = { try await makePlatformSpeechSynthesizer().synthesize($0) },
+    agent: (any Agent)? = nil
 ) throws {
+    // Missing agent configuration fails here, at startup, with a clear message.
+    let agent = try agent ?? OpenAIChatAgent(
+        client: app.client, config: AgentConfig(environment: ProcessInfo.processInfo.environment)
+    )
     app.http.server.configuration.hostname = "0.0.0.0"
     if let value = Environment.get("PORT") {
         guard let port = Int(value), (1...65535).contains(port) else {
@@ -171,7 +233,7 @@ func configure(
     app.get("conversation") { _ -> Response in
         let response = Response(status: .switchingProtocols)
         response.upgrader = ConversationUpgrader { socket in
-            _ = Conversation(socket: socket, timeout: turnTimeout, synthesize: synthesize)
+            _ = Conversation(socket: socket, timeout: turnTimeout, agent: agent, logger: app.logger, synthesize: synthesize)
         }
         return response
     }
