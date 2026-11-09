@@ -42,8 +42,11 @@ Transcripts and audio stay in memory. The application neither writes them to dis
 
 ## Tests
 
+On a Mac, run `swift build` first: it is the only check that compiles the macOS voice code, which Linux skips.
+
 ```sh
 cd server
+swift build
 swift test
 # Also exercise the installed voice over a local WebSocket for two turns:
 CONVOKE_TEST_SYSTEM_VOICE=1 swift test

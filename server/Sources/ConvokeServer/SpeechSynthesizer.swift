@@ -17,7 +17,7 @@ struct UnavailableSpeechSynthesizer: SpeechSynthesizer {
     }
 }
 
-func makePlatformSpeechSynthesizer() -> any SpeechSynthesizer {
+@MainActor func makePlatformSpeechSynthesizer() -> any SpeechSynthesizer {
     #if canImport(AVFoundation)
     return MacSpeechSynthesizer()
     #else
