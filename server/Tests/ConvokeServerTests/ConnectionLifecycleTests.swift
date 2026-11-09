@@ -18,7 +18,7 @@ final class ConnectionLifecycleTests: XCTestCase {
             try channel.connect(to: SocketAddress(ipAddress: "127.0.0.1", port: 8080)).wait()
             let weakConversation = WeakConversation()
             let configured = WebSocket.server(on: channel) { socket in
-                let conversation = Conversation(socket: socket, timeout: .seconds(10)) { _ in Data([0, 0]) }
+                let conversation = Conversation(socket: socket, timeout: .seconds(10), agent: EchoTestAgent()) { _ in Data([0, 0]) }
                 weakConversation.value = conversation
             }
             channel.embeddedEventLoop.run()
@@ -160,7 +160,7 @@ final class ConnectionLifecycleTests: XCTestCase {
             try configure(app, turnTimeout: turnTimeout, synthesize: { _ in
                 try await Task.sleep(nanoseconds: 30_000_000_000)
                 return Data([0, 0])
-            })
+            }, agent: EchoTestAgent())
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let peer = try RawPeer(port: port)

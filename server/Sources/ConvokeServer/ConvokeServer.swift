@@ -1,3 +1,4 @@
+import Foundation
 import Vapor
 
 @main
@@ -12,7 +13,10 @@ enum ConvokeServer {
             try await app.asyncShutdown()
         } catch {
             try? await app.asyncShutdown()
-            throw error
+            // A plain one-line message, not a crash trace.
+            let message = (error as? Abort)?.reason ?? "\(error)"
+            FileHandle.standardError.write(Data("ConvokeServer cannot start: \(message)\n".utf8))
+            exit(1)
         }
     }
 }
