@@ -3,7 +3,7 @@ import Vapor
 import NIOCore
 
 enum ConversationError: Error {
-    case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer, replyTooLarge
+    case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer
 }
 
 enum ConversationProtocol {
@@ -54,6 +54,14 @@ final class Conversation: @unchecked Sendable {
     // Per-connection history, touched only on the socket's event loop. Never persisted.
     private var history: [ChatMessage] = []
     private static let maxHistoryMessages = 40
+
+    /// Drops the oldest whole user/assistant pairs so the history still starts with a user message.
+    static func trimmed(_ history: [ChatMessage]) -> [ChatMessage] {
+        var result = history
+        while result.count > maxHistoryMessages { result.removeFirst(2) }
+        return result
+    }
+
     private var agentTurn: Task<Void, Never>?
     private var synthesis: Task<Void, Never>?
     private var deadline: Scheduled<Void>?
@@ -83,9 +91,7 @@ final class Conversation: @unchecked Sendable {
             state = .active
             deadline = socket.eventLoop.scheduleTask(in: timeout) { self.close() }
             history.append(ChatMessage(role: .user, content: userText))
-            if history.count > Self.maxHistoryMessages {
-                history.removeFirst(history.count - Self.maxHistoryMessages)
-            }
+            history = Self.trimmed(history)
             let snapshot = history
             logger.info("Turn started", metadata: ["userBytes": "\(userText.utf8.count)", "historyMessages": "\(snapshot.count)"])
             agentTurn = Task { [agent] in

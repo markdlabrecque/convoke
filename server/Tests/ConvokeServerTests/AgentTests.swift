@@ -45,6 +45,18 @@ final class AgentTests: XCTestCase {
         }
     }
 
+    func testHistoryTrimKeepsWholePairsStartingWithUser() {
+        var history: [ChatMessage] = []
+        for turn in 1...30 {
+            history.append(ChatMessage(role: .user, content: "u\(turn)"))
+            history = Conversation.trimmed(history)
+            XCTAssertEqual(history.first?.role, .user, "turn \(turn)")
+            XCTAssertLessThanOrEqual(history.count, 40)
+            XCTAssertEqual(history.last?.content, "u\(turn)")
+            history.append(ChatMessage(role: .assistant, content: "a\(turn)"))
+        }
+    }
+
     final class Stub: @unchecked Sendable { var path = "", auth = "", body = "" }
 
     private func withStub(_ stub: Stub, status: HTTPStatus, body: String, _ run: (OpenAIChatAgent) async throws -> Void) async throws {
