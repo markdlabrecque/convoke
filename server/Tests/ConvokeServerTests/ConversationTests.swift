@@ -45,24 +45,20 @@ final class ConversationTests: XCTestCase {
     }
 
     func testSequentialTurnsAndChunkCounts() async throws {
-        #if os(Linux)
-        // swift-corelibs URLSessionWebSocketTask hands back messages cut at ~16 KiB, so
-        // multi-chunk audio frames cannot be read by this client on Linux.
-        throw XCTSkip("URLSessionWebSocketTask truncates large messages on Linux")
-        #endif
         let audio = Data((0..<40_002).map { UInt8($0 % 251) })
         try await withServer(synthesize: { text in
             XCTAssertTrue(text.hasPrefix("You said: "))
             return audio
         }) { socket in
+                let wire = try await WireClient.connect(socket)
             for word in ["first", "second"] {
-                try await socket.send(.string(self.userText(" \(word) \n")))
-                let text = try await self.receive(socket)
+                try await wire.send(self.userText(" \(word) \n"))
+                let text = try await wire.next()
                 XCTAssertEqual(text["type"] as? String, "agent.text")
                 XCTAssertEqual(text["text"] as? String, "You said: \(word)")
                 var reconstructed = Data()
                 for sequence in 0..<3 {
-                    let frame = try await self.receive(socket)
+                    let frame = try await wire.next()
                     XCTAssertEqual(frame["type"] as? String, "agent.audio")
                     XCTAssertEqual(frame["sequence"] as? Int, sequence)
                     let chunk = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
@@ -71,7 +67,7 @@ final class ConversationTests: XCTestCase {
                     reconstructed.append(chunk)
                 }
                 XCTAssertEqual(reconstructed, audio)
-                let done = try await self.receive(socket)
+                let done = try await wire.next()
                 XCTAssertEqual(done["type"] as? String, "agent.done")
                 XCTAssertEqual(done["chunks"] as? Int, 3)
             }
@@ -79,19 +75,15 @@ final class ConversationTests: XCTestCase {
     }
 
     func testExactChunkAndAudioCapCompletionCounts() async throws {
-        #if os(Linux)
-        // swift-corelibs URLSessionWebSocketTask hands back messages cut at ~16 KiB, so
-        // multi-chunk audio frames cannot be read by this client on Linux.
-        throw XCTSkip("URLSessionWebSocketTask truncates large messages on Linux")
-        #endif
         for size in [2, 16_384, ConversationProtocol.maxAudioBytes] {
             try await withServer(synthesize: { _ in Data(repeating: 42, count: size) }) { socket in
-                try await socket.send(.string(self.userText("boundary")))
-                _ = try await self.receive(socket)
+                let wire = try await WireClient.connect(socket)
+                try await wire.send(self.userText("boundary"))
+                _ = try await wire.next()
                 let expectedChunks = (size + 16_383) / 16_384
                 var receivedBytes = 0
                 for sequence in 0..<expectedChunks {
-                    let frame = try await self.receive(socket)
+                    let frame = try await wire.next()
                     XCTAssertEqual(frame["type"] as? String, "agent.audio")
                     XCTAssertEqual(frame["sequence"] as? Int, sequence)
                     let data = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
@@ -99,7 +91,7 @@ final class ConversationTests: XCTestCase {
                     receivedBytes += data.count
                 }
                 XCTAssertEqual(receivedBytes, size)
-                let done = try await self.receive(socket)
+                let done = try await wire.next()
                 XCTAssertEqual(done["type"] as? String, "agent.done")
                 XCTAssertEqual(done["chunks"] as? Int, expectedChunks)
             }
@@ -220,6 +212,7 @@ final class ConversationTests: XCTestCase {
                 let text = try await self.receive(socket)
                 XCTAssertEqual(text["type"] as? String, "agent.text")
                 await self.assertClosed(socket)
+                XCTAssertEqual(socket.closeCode, .internalServerError, "Server-side speech failure closes with 1011")
             }
         }
     }
@@ -305,6 +298,46 @@ final class ConversationTests: XCTestCase {
     }
 #endif
 
+    // Opt-in: needs a running Kokoro sidecar, e.g. CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880.
+    // Prints sizes and timings only; audio is neither saved nor logged.
+    func testKokoroSidecarSmoke() async throws {
+        guard let url = ProcessInfo.processInfo.environment["CONVOKE_TEST_KOKORO_URL"] else {
+            throw XCTSkip("Set CONVOKE_TEST_KOKORO_URL to exercise a real Kokoro sidecar")
+        }
+        setenv("CONVOKE_KOKORO_URL", url, 1)
+        defer { unsetenv("CONVOKE_KOKORO_URL") }
+        try await withServer(timeout: .seconds(60)) { socket in
+            let wire = try await WireClient.connect(socket)
+            let start = ContinuousClock.now
+            try await wire.send(self.userText("Testing one two three."))
+            let reply = try await wire.next()
+            XCTAssertEqual(reply["type"] as? String, "agent.text")
+            var firstChunk: Duration?
+            var bytes = 0, chunks = 0
+            var nonSilent = false
+            while true {
+                let frame = try await wire.next()
+                if frame["type"] as? String == "agent.done" {
+                    XCTAssertEqual(frame["chunks"] as? Int, chunks)
+                    break
+                }
+                XCTAssertEqual(frame["type"] as? String, "agent.audio")
+                XCTAssertEqual(frame["sequence"] as? Int, chunks)
+                if firstChunk == nil { firstChunk = ContinuousClock.now - start }
+                let chunk = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
+                XCTAssertLessThanOrEqual(chunk.count, 16384)
+                nonSilent = nonSilent || chunk.contains { $0 != 0 }
+                bytes += chunk.count
+                chunks += 1
+            }
+            let total = ContinuousClock.now - start
+            XCTAssertTrue(nonSilent)
+            XCTAssertTrue(bytes.isMultiple(of: 2))
+            XCTAssertGreaterThan(chunks, 1, "A sentence is more than one 16 KiB chunk")
+            print("KOKORO-SMOKE bytes=\(bytes) audioSeconds=\(Double(bytes) / 48_000) chunks=\(chunks) firstChunk=\(firstChunk!) total=\(total)")
+        }
+    }
+
     private func userText(_ text: String) throws -> String {
         String(decoding: try JSONSerialization.data(withJSONObject: ["type": "user.text", "text": text]), as: UTF8.self)
     }
@@ -333,7 +366,7 @@ final class ConversationTests: XCTestCase {
     private func withServer(
         timeout: TimeAmount = .seconds(10),
         agent: any Agent = EchoTestAgent(),
-        synthesize: @escaping Conversation.Synthesize,
+        synthesize: Conversation.Synthesize? = nil,
         body: (URLSessionWebSocketTask) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)
@@ -363,4 +396,44 @@ final class ConversationTests: XCTestCase {
             throw error
         }
     }
+}
+
+/// A WebSocketKit client. Unlike URLSessionWebSocketTask on Linux it reads whole large frames,
+/// so chunked audio can be checked on every platform.
+private final class WireClient {
+    private let socket: WebSocket
+    private var frames: AsyncStream<[String: Any]>.AsyncIterator
+
+    private init(socket: WebSocket, frames: AsyncStream<[String: Any]>.AsyncIterator) {
+        self.socket = socket
+        self.frames = frames
+    }
+
+    static func connect(_ peer: URLSessionWebSocketTask) async throws -> WireClient {
+        let url = peer.originalRequest!.url!.absoluteString.replacingOccurrences(of: "http://", with: "ws://")
+        let (stream, continuation) = AsyncStream<[String: Any]>.makeStream()
+        let socket: WebSocket = try await withCheckedThrowingContinuation { opened in
+            WebSocket.connect(
+                to: url, configuration: .init(maxFrameSize: 1 << 20), on: MultiThreadedEventLoopGroup.singleton
+            ) { socket in
+                socket.onText { _, text in
+                    if let frame = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
+                        continuation.yield(frame)
+                    }
+                }
+                socket.onClose.whenComplete { _ in continuation.finish() }
+                opened.resume(returning: socket)
+            }.whenFailure { opened.resume(throwing: $0) }
+        }
+        return WireClient(socket: socket, frames: stream.makeAsyncIterator())
+    }
+
+    func send(_ text: String) async throws { try await socket.send(text) }
+
+    func next() async throws -> [String: Any] {
+        guard let frame = await frames.next() else { throw ConversationError.invalidMessage }
+        return frame
+    }
+
+    deinit { socket.close(code: .normalClosure, promise: nil) }
 }
