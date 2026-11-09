@@ -72,9 +72,9 @@ final class Conversation: @unchecked Sendable {
         synthesize: @escaping Synthesize
     ) {
         self.socket = socket
+        self.logger = logger
         self.timeout = timeout
         self.agent = agent
-        self.logger = logger
         self.synthesize = synthesize
         socket.onText { [weak self] _, text in self?.receive(text) }
         socket.onBinary { [weak self] _, _ in self?.close() }
@@ -148,6 +148,10 @@ final class Conversation: @unchecked Sendable {
                 try Task.checkCancellation()
                 self.socket.eventLoop.execute { self.sendAudio(audio) }
             } catch {
+                // Reasons carry status codes and types only, never text or audio.
+                if !(error is CancellationError) {
+                    self.logger.error("Speech synthesis failed", metadata: ["reason": "\(error)"])
+                }
                 self.socket.eventLoop.execute { self.close() }
             }
         }
@@ -220,13 +224,16 @@ final class Conversation: @unchecked Sendable {
 func configure(
     _ app: Application,
     turnTimeout: TimeAmount = .seconds(120),
-    synthesize: @escaping Conversation.Synthesize = { try await makePlatformSpeechSynthesizer().synthesize($0) },
+    synthesize: Conversation.Synthesize? = nil,
     agent: (any Agent)? = nil
 ) throws {
-    // Missing agent configuration fails here, at startup, with a clear message.
+    // Missing agent configuration or a malformed CONVOKE_KOKORO_URL fails here, at startup.
     let agent = try agent ?? OpenAIChatAgent(
         client: app.client, config: AgentConfig(environment: ProcessInfo.processInfo.environment)
     )
+    let kokoro = try KokoroConfig(environment: ProcessInfo.processInfo.environment)
+    let client = app.client
+    let synthesize = synthesize ?? { try await makeSpeechSynthesizer(kokoro: kokoro, client: client).synthesize($0) }
     app.http.server.configuration.hostname = "0.0.0.0"
     if let value = Environment.get("PORT") {
         guard let port = Int(value), (1...65535).contains(port) else {

@@ -1,3 +1,4 @@
+import Vapor
 import Foundation
 import Logging
 
@@ -23,4 +24,10 @@ struct UnavailableSpeechSynthesizer: SpeechSynthesizer {
     #else
     return UnavailableSpeechSynthesizer()
     #endif
+}
+
+/// Kokoro when `CONVOKE_KOKORO_URL` is set, on every platform; otherwise the platform voice.
+@MainActor func makeSpeechSynthesizer(kokoro: KokoroConfig?, client: any Client) -> any SpeechSynthesizer {
+    if let kokoro { return KokoroSpeechSynthesizer(client: client, config: kokoro) }
+    return makePlatformSpeechSynthesizer()
 }
