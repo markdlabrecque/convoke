@@ -34,7 +34,27 @@ The server binds `0.0.0.0` and has **no application authentication or TLS**. Res
 
 ## Linux
 
-The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Only macOS has a synthesizer today, so on Linux each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. Two chunked-audio tests are skipped on Linux because its `URLSessionWebSocketTask` truncates large messages.
+The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Only macOS has a synthesizer today, so on Linux each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. The chunked-audio tests read frames with WebSocketKit's client, because Linux's `URLSessionWebSocketTask` truncates large messages.
+
+## Kokoro speech (optional sidecar)
+
+Set `CONVOKE_KOKORO_URL` and the server speaks with [Kokoro](https://github.com/remsky/Kokoro-FastAPI) on every platform, Mac included. Unset, a Mac uses the macOS voice and Linux logs that no synthesizer is available.
+
+| Variable | Meaning |
+| --- | --- |
+| `CONVOKE_KOKORO_URL` | Sidecar root, for example `http://127.0.0.1:8880`. The server posts to `<url>/v1/audio/speech` with `response_format: pcm`, which is 24 kHz mono signed 16-bit PCM, the same bytes the wire carries. |
+| `CONVOKE_KOKORO_VOICE` | Optional. Defaults to `af_heart`. |
+
+Run the CPU sidecar in Docker, bound to this machine only. The server has no authentication, and neither does the sidecar, so never publish its port beyond `127.0.0.1`:
+
+```sh
+docker run -d --rm --name convoke-kokoro -p 127.0.0.1:8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+curl http://127.0.0.1:8880/health   # wait for {"status":"healthy"}
+export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
+docker stop convoke-kokoro          # when done
+```
+
+The same command works on a Mac (Docker Desktop, Apple Silicon runs the CPU image under emulation or natively if available). If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn; there is no fallback to another voice.
 
 ## Internal exchange
 
