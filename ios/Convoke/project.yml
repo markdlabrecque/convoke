@@ -1,7 +1,7 @@
 name: Convoke
 options:
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "26.0"
   xcodeVersion: "16.0"
 packages:
   ConvokeCore:
@@ -35,7 +35,7 @@ targets:
         NSSpeechRecognitionUsageDescription: Convoke uses Apple speech recognition to transcribe your speech. Audio may be sent to Apple.
         NSLocalNetworkUsageDescription: Convoke connects to your development server on your Mac.
         NSAppTransportSecurity:
-          # Developer-only: arbitrary numeric Tailscale IPs must work on iOS 16.
+          # Developer-only: arbitrary numeric Tailscale IPs must work on iOS.
           # Do not add NSAllowsLocalNetworking alongside this key: its presence
           # causes iOS 10+ to ignore NSAllowsArbitraryLoads.
           NSAllowsArbitraryLoads: true

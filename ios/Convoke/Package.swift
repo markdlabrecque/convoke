@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ConvokeCore",
-    platforms: [.iOS(.v16), .macOS(.v13)],
+    platforms: [.iOS("26.0"), .macOS(.v13)],
     products: [.library(name: "ConvokeCore", targets: ["ConvokeCore"])],
     targets: [
         .target(name: "ConvokeCore", path: "Core"),
