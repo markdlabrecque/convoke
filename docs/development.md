@@ -98,20 +98,20 @@ The simulator suite excludes the six macOS-only loopback transport tests, accoun
 
 ## Physical-iPhone acceptance checklist
 
-Status: **not performed**. The developer must perform these checks on a physical iPhone. Do not mark the parent issue complete based on the automated results alone.
+**Passed on 2026-11-08**, reported by the developer using an iPhone 17 running iOS 27.0.1, a Mac running macOS 27.0.1, Xcode 27.2, and port 8080. The source revision was `52df9b6`; Xcode also changed local signing, deployment-target, and scheme settings for the device build. The automated checks were also rerun at `52df9b6`: server with system voice, 26 passed; client package, 41 passed; iPhone 18 Pro simulator, 35 passed. The device test target could not run on hardware because it is tool-hosted without a host application. The physical checks below were performed manually.
 
-Record the revision tested, Mac/Xcode and iPhone/iOS versions, date, chosen port, and pass/fail for each row. Do not include private IPs, transcripts, or audio in the report.
+Do not include private IPs, transcripts, or audio in reports.
 
 | Check | Procedure and expected result | Result |
 | --- | --- | --- |
-| Spoken echo over Tailscale | With both devices connected to Tailscale, connect using the Mac's Tailscale IP. Record a short non-sensitive phrase and submit. Hear "You said:" followed by the recognized words from the iPhone speaker. | Pending user |
-| Sequential turns and gating | Without reconnecting, submit a second distinct phrase. During Waiting and Playing, verify Start recording is disabled. It becomes available only after playback ends. Hear the second echo. | Pending user |
-| Interrupted turn and fresh reconnect | Start a turn, then stop the Mac server with Control-C while the phone is recording, waiting, or playing. Verify the phone reaches Disconnected and capture/playback stops. Restart the server, tap Connect manually, and complete a new turn. No old response resumes or plays. | Pending user |
-| Tailscale path interruption | Start a turn and interrupt Tailscale connectivity using the phone's Tailscale controls. Returning to Convoke also disconnects because it was backgrounded. Restore Tailscale, return to Convoke, manually Connect, and complete a new turn without replaying the old one. Use the server-stop check above to test socket loss while the app stays foregrounded. | Pending user |
+| Spoken echo over Tailscale | With both devices connected to Tailscale, connect using the Mac's Tailscale IP. Record a short non-sensitive phrase and submit. Hear "You said:" followed by the recognized words from the iPhone speaker. | Passed |
+| Sequential turns and gating | Without reconnecting, submit a second distinct phrase. During Waiting and Playing, verify Start recording is disabled. It becomes available only after playback ends. Hear the second echo. | Passed |
+| Interrupted turn and fresh reconnect | Start a turn, then stop the Mac server with Control-C while the phone is recording, waiting, or playing. Verify the phone reaches Disconnected and capture/playback stops. Restart the server, tap Connect manually, and complete a new turn. No old response resumes or plays. | Passed |
+| Tailscale path interruption | Start a turn and interrupt Tailscale connectivity using the phone's Tailscale controls. Returning to Convoke also disconnects because it was backgrounded. Restore Tailscale, return to Convoke, manually Connect, and complete a new turn without replaying the old one. Use the server-stop check above to test socket loss while the app stays foregrounded. | Passed |
 
 Additional useful checks: leave capture running to confirm automatic submission at 60 seconds, try silence to confirm empty recognition is discarded, deny permissions and retry after restoring them, and background the app during playback to confirm cleanup. Recognition may fail on silence rather than return an empty final result; either outcome should return a connected session to Ready without sending text.
 
-Post the automated results and physical-check outcomes to [issue #4](https://github.com/markdlabrecque/convoke/issues/4). Leave it and [parent #5](https://github.com/markdlabrecque/convoke/issues/5) open until both required physical-device checks have been performed and recorded.
+The physical-device checks above cover the first-slice acceptance criteria. The optional checks remain unverified.
 
 ## Troubleshooting
 
