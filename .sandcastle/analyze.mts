@@ -5,13 +5,15 @@ import { fileURLToPath } from "node:url";
 import { keyFor, stateDir } from "./board.mts";
 import { AGENT, GRAPH } from "./config.mts";
 import { contentHash, isSandcastleNote, unitHash } from "./graph.mts";
+import { piAnalysisArgs } from "./models.mts";
 import type { Manifest, Note, Requirement } from "./graph.mts";
 import type { Ticket } from "./tracker.mts";
 
 // Ticket analysis: one read-only agent run on the host per ticket, against a detached worktree at
 // origin/<base>, with GRAPH.model. AGENT.provider "claude": `claude -p` with Read, Grep and Glob and a
-// JSON schema. "pi": `pi -p` with read, grep, find and ls, no extensions, skills or context files, and
-// the JSON parsed from its reply. Either way no shell, no writes and no MCP servers, because ticket
+// JSON schema. "pi": `pi -p` with read, grep, find and ls, no discovered extensions, skills or context files
+// (the pi-claude-subscription provider is the one extension loaded, by an explicit -e), and the JSON parsed
+// from its reply. Either way no shell, no writes and no MCP servers, because ticket
 // text is untrusted input.
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -80,11 +82,7 @@ function runClaude(iid: number, prompt: string, cwd: string): Analysis {
 /** pi has no schema flag: ask for bare JSON, take the outermost object from the reply, check its shape. */
 function runPi(iid: number, prompt: string, cwd: string): Analysis {
   const ask = `${prompt}\n\n## Output\n\nReply with one JSON object and nothing else (no prose, no code fence), matching this JSON Schema:\n\n${JSON.stringify(SCHEMA)}\n`;
-  const res = spawnSync(
-    "pi",
-    ["-p", "--model", GRAPH.model, "--tools", "read,grep,find,ls", "--no-extensions", "--no-skills", "--no-context-files", "--no-session"],
-    spawnOpts(cwd, ask),
-  );
+  const res = spawnSync("pi", piAnalysisArgs(GRAPH.model, process.env, existsSync), spawnOpts(cwd, ask));
   if (res.status !== 0) throw failed(iid, res);
   const text = res.stdout;
   const start = text.indexOf("{");

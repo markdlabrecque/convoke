@@ -8,9 +8,10 @@ Implement ONE GitHub issue on the current branch, cut from `{{BASE_BRANCH}}`.
 
 ## Environment
 
-- This is the Convoke server/protocol repository. The repository plan is `plan.md`; the protocol specification and fixtures belong in `protocol/`. Server code belongs in `server/`.
-- The repository may not yet have an established server stack or test suite. Inspect the existing files and issue before choosing or introducing tooling; avoid broad scaffolding unrelated to the issue.
-- Tests run in the project-specific Linux container. Run the most relevant available checks and report commands/results honestly. If no relevant test command exists, say so.
+- Convoke contains the Swift server in `server/`, protocol fixtures in `protocol/`, and the iPhone app and local ConvokeCore package in `ios/Convoke/`. The ticket is the implementation specification; there is no tracked root plan.md.
+- The integration branch is `spike-3`. Factory opens PRs into that branch and automatically merges only after its CI gate passes. Changes to main are outside this run.
+- This is a Linux container without Xcode, Apple SDKs, or a physical iPhone. Run all relevant available checks and record exact results. Write and inspect Apple-platform tests even when they cannot run here. Mark Mac/iPhone checks Pending for the owner after merge; their unavailability alone is not an implementation blocker or a claim that tests passed.
+- The owner performs Mac/Xcode and physical-device acceptance after merge into spike-3. Do not contact a Mac or production host, invent hardware evidence, or weaken tests to hide a known defect. Model API or code defects still require investigation; only unavailable platform execution is deferred.
 - You have no tracker access. Do not run `gh`, push, open a PR, comment on or close the issue. The orchestrator does that.
 
 ## Workflow

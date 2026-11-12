@@ -10,7 +10,9 @@ Verify ticket #{{ISSUE_IID}} on branch `{{BRANCH}}` at `{{TIP_SHA}}`, based on `
 
 - Never edit tracked files, commit, push, or use `gh`. Keep HEAD at `{{TIP_SHA}}` on `{{BRANCH}}` and the worktree clean.
 - Put verification output in `{{EVIDENCE_DIR}}`.
-- Verify actual behavior using the available tests, scripts, or manual checks. Do not claim checks you did not run. If visual behavior is relevant, capture and inspect screenshots; otherwise use reproducible command output as evidence.
+- Verify actual behavior using available tests and inspect the implementation and tests. Keep command output as reproducible evidence. Do not claim checks you did not run.
+- This run targets the `spike-3` integration branch, not main. The owner explicitly performs Mac/Xcode and physical-iPhone testing after merge. This Linux container lacks Apple SDKs and hardware. Mark those checks Pending in the verdict rather than treating their unavailability alone as FAIL or INCONCLUSIVE. PASS means the available checks and code review support merging into spike-3, not that Apple-platform acceptance passed. A known code defect or failing available check still prevents PASS.
+- Do not access a Mac or production host. For documentation tasks, check the instructions and honest Pending result fields; the owner fills in actual Mac/iPhone evidence later.
 
 ## Procedure
 
