@@ -32,7 +32,6 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: Convoke records speech to send your recognized words to your configured server.
-        NSSpeechRecognitionUsageDescription: Convoke uses Apple speech recognition to transcribe your speech. Audio may be sent to Apple.
         NSLocalNetworkUsageDescription: Convoke connects to your development server on your Mac.
         NSAppTransportSecurity:
           # Developer-only: arbitrary numeric Tailscale IPs must work on iOS.

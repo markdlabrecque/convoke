@@ -1,41 +1,43 @@
 // Project settings shared by main.mts and dispatch.mts. Edit this file when adapting to a project.
-// Reference config for personal projects: GitHub issues and PRs, the Pi agent with GPT models, and
-// PRs merged automatically once CI passes. Install it into a project as .sandcastle/config.mts.
-// The client / Affinity Bridge reference (GitLab, Claude Code, MRs a person merges) is config.mts.
+// Reference config for personal projects: GitHub issues and PRs, the Pi agent with Claude subscription
+// models (the pi-claude-subscription provider), and PRs merged automatically once CI passes. `factory init`
+// installs it into a project as .sandcastle/config.mts. The client / Affinity Bridge reference (GitLab,
+// Claude Code, MRs a person merges) is config.mts. Lines tagged `// factory:<name>` are the values
+// `factory init` fills in; keep each tag exactly once.
 
 export const TRACKER = {
   kind: "github" as "gitlab" | "github", // picks tracker.github.mts
   host: "github.com",
-  project: "markdlabrecque/convoke", // the GitHub repo, as gh -R takes it
+  project: "markdlabrecque/convoke", // factory:project - the GitHub repo, as gh -R takes it
   // Milestone (title). The dispatcher only picks issues in it, and the ticket graph looks for
   // blockers among its open issues. undefined = every open issue in the repo.
-  milestone: undefined as string | undefined,
+  milestone: undefined as string | undefined, // factory:milestone
 };
 
-// The only three models this config uses (pi provider/id). Rough Claude equivalents: sol = Opus,
-// terra = Sonnet, luna = Haiku. Every model below must be one of these; main.mts and dispatch.mts refuse
-// to run otherwise.
+// The only two models this config uses (pi provider/id, from the pi-claude-subscription provider, which
+// runs the Claude Code CLI on a Claude subscription). Every model below must be one of these; main.mts and
+// dispatch.mts refuse to run otherwise.
 const MODELS = {
-  sol: "openai/gpt-6.1-sol",
-  terra: "openai/gpt-6.1-terra",
-  luna: "openai/gpt-6-luna",
+  sonnet: "pi-claude-subscription/claude-sonnet-5-5",
+  opus: "pi-claude-subscription/claude-opus-5-5",
 };
 
-// The Pi coding agent (https://pi.dev) runs the implementer and verifier in the container and the
-// ticket analysis on the host. All of them use the host's pi login (Sign in with ChatGPT; check it with
-// `pi auth check --provider openai`). Each container run gets a fresh OAuth access token from
-// `pi auth print-bearer-token`, good for about an hour, so one implementer or verifier run must finish
-// within that. Nothing goes in .sandcastle/.env.
+// The Pi coding agent (https://pi.dev) runs the implementer and verifier in the container and the ticket
+// analysis on the host, always through the pi-claude-subscription provider (a Pi extension that spawns
+// `claude -p`). Host: `claude auth login` and the extension installed (see ADAPTING.md); analysis loads it
+// with an explicit `-e`, so no other extension is enabled. Container: the image carries the extension and
+// the Claude Code CLI (agent-pi layer), and the CLI logs in with CLAUDE_CODE_OAUTH_TOKEN from
+// .sandcastle/.env (`claude setup-token`). There is no Pi login or API key for this provider.
 export const AGENT = {
   provider: "pi" as "claude" | "pi",
   // The implementer's model comes from the ticket: every ticket must carry exactly one of these
-  // labels. One without (or with two) is not started; the board says why.
+  // labels. One without (or with two) is not started; the board says why. The label alone selects the
+  // model; a model name written in the ticket body schedules nothing.
   modelLabels: {
-    "model:sol": MODELS.sol,
-    "model:terra": MODELS.terra,
-    "model:luna": MODELS.luna,
+    "model:sonnet": MODELS.sonnet,
+    "model:opus": MODELS.opus,
   } as Record<string, string>,
-  model: MODELS.sol, // fixed: the verifier
+  model: MODELS.opus, // fixed: the verifier
   // Reasoning effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh".
   thinking: "high" as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined,
 };
@@ -74,7 +76,7 @@ export const SUBTASKS = {
 
 // Ticket graph: dependency analysis and conflict holds (see graph.mts).
 export const GRAPH = {
-  model: MODELS.terra, // fixed: the read-only analysis on the host
+  model: MODELS.sonnet, // fixed: the read-only analysis on the host
   maxAnalysesPerPass: 5,
   analysisTimeoutMinutes: 10,
   // Paths whose overlap never holds a ticket back: exact file, or directory ending in "/".

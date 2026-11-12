@@ -29,8 +29,6 @@
 	<string>Convoke connects to your development server on your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Convoke records speech to send your recognized words to your configured server.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Convoke uses Apple speech recognition to transcribe your speech. Audio may be sent to Apple.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

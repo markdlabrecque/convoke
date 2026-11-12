@@ -11,23 +11,24 @@ cd ios/Convoke
 xcodegen generate
 ```
 
-For the complete Mac/Tailscale setup, recorded automated results, and physical-iPhone acceptance checklist, see `development.md` in the work root (developer setup and verification).
+For the complete Mac/Tailscale setup, recorded automated results, and physical-iPhone acceptance checklist, see [`docs/development.md`](../../docs/development.md) (developer setup and verification).
 
-## Capture flow
+## Conversation flow
 
 1. Enter `ws://<Mac Tailscale IP>:8080/conversation`, replacing the placeholder with the Mac's numeric Tailscale IP. The URL is the only app setting saved to UserDefaults.
-2. Tap Connect and wait for Ready. This means the WebSocket handshake completed, not just that a task was created.
-3. Tap Start recording. Allow speech recognition and microphone access. Apple recognition may send audio to Apple.
-4. Speak, then tap Submit recording. After 60 seconds of capture the app submits automatically. It ends audio input and waits up to five seconds for Apple's final result. It never sends a partial transcript as a substitute. Empty results are discarded; text over 4096 UTF-8 bytes is rejected.
-5. A successful send leaves the app in Waiting while it buffers the response. After a valid `agent.done`, it plays the PCM through the speaker and shows Playing. Recording stays disabled until playback finishes and the app returns to Ready for another turn.
+2. Tap Connect and wait for Connected. This means the WebSocket handshake completed. Connect never opens the microphone.
+3. Tap Start conversation. Allow microphone access. The first run may download the on-device speech model ("Preparing speech recognition"). Recognition uses `SpeechAnalyzer` and `SpeechTranscriber` (iOS 26+) and runs on the device; there is no cloud fallback.
+4. Speak. The turn is submitted automatically after 2.5 seconds of silence following speech; the countdown restarts on every transcript change and never runs before speech is heard. A 60-second capture limit also submits (an empty result just keeps listening). After submission the app ends audio input and waits up to five seconds for the recognizer's finalized text. It never sends volatile or partial text as a substitute. Text over 4096 UTF-8 bytes is rejected with a visible message.
+5. A successful send leaves the app in Waiting while it buffers the response. After a valid `agent.done`, it plays the complete PCM reply and shows Playing. When playback finishes the app listens again automatically.
+6. Tap End conversation to stop. Listening and playback are cancelled and the connection stays open. If a reply is still being buffered (Waiting), the protocol cannot cancel the turn, so ending closes the connection. Disconnect and backgrounding also end the conversation.
 
-If Apple ends recognition before Submit or the capture deadline, the app discards that interrupted turn and returns to Ready rather than silently stopping the microphone while still showing Recording.
+Permission, model, locale and recognition failures end the conversation, return the connected session to Ready and show a content-free error on screen. The app does not retry in a loop. Change denied microphone permission in iOS Settings before retrying. There is no manual Submit.
 
 The transport keeps a raw WebSocket read pending so URLSession processes remote close and pong frames even when no application receive is pending. It also sends a ping every two seconds and disconnects if the peer does not answer within five seconds. Raw application frames stay in memory until consumed, bounded to 1024 frames or 16 MiB including base64 overhead. Exceeding either unread-buffer limit closes the connection. No conversation messages are parsed here.
 
-Disconnect discards capture, cancels timers and transport monitoring, clears buffered frames, stops the player, and closes the socket. Backgrounding the app does the same. The app never reconnects automatically. Permission or recognition failures return a connected session to Ready and write a generic developer log without transcript contents. Change denied permissions in iOS Settings before retrying.
+Disconnect discards capture, cancels timers and transport monitoring, clears buffered frames, stops the player, and closes the socket. Backgrounding the app does the same. The app never reconnects automatically. Failures write a generic developer log without transcript contents.
 
-The app has no bearer token or application authentication. Use only a trusted development network and enforce access controls on the Mac. The developer-configured numeric IP requires a cleartext ATS allowance, so this developer app includes `NSAllowsArbitraryLoads`. Do not add `NSAllowsLocalNetworking` alongside it, because on iOS 10+ that key causes the arbitrary-loads exception to be ignored. Do not carry the broad exception into a production release. Transcript text is held in memory for recognition and sending, not stored by the app or written to its logs.
+The app has no bearer token or application authentication. Use only a trusted development network and enforce access controls on the Mac. The developer-configured numeric IP requires a cleartext ATS allowance, so this developer app includes `NSAllowsArbitraryLoads`. Do not add `NSAllowsLocalNetworking` alongside it, because on iOS 10+ that key causes the arbitrary-loads exception to be ignored. Do not carry the broad exception into a production release. Transcript text is held in memory for sending, not stored by the app or written to its logs.
 
 ## Tests and builds
 
@@ -54,7 +55,7 @@ xcodebuild -project Convoke.xcodeproj -scheme Convoke \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-Tests cover persistence, connection lifecycle and failures, state gating, JSON encoding, empty results, UTF-8 and frame limits, the capture deadline, cleanup, and late callbacks after disconnect. Controller tests use fakes. On macOS, localhost integration tests exercise the actual transport without an application receive, including remote close, missing pong, reconnection, cancellation, and raw-frame delivery. Adapter tests exercise premature recognition completion through the controller, final-result ordering, finalization cancellation, and deadlines without permissions or microphone access. The same adapter sources compile in the Swift package test target; only iOS audio-session configuration is conditional. Hardware permissions and actual recognition still need a physical-phone check.
+Tests cover persistence, connection lifecycle and failures, state gating, JSON encoding, empty results, UTF-8 and frame limits, the 2.5-second silence and 60-second capture timers, automatic listening after playback, End conversation during every state, visible errors, cleanup, and late callbacks after disconnect. Controller tests use fakes. On macOS, localhost integration tests exercise the actual transport without an application receive, including remote close, missing pong, reconnection, cancellation, and raw-frame delivery. Adapter tests exercise premature completion through the controller, finalized-segment joining, volatile-text exclusion, speech-activity reporting, finalization cancellation, and the five-second deadline without permissions, speech models or microphone access. The same adapter sources compile in the Swift package test target; only iOS audio-session configuration is conditional. The package targets macOS 26 because SpeechAnalyzer requires it. Model download, microphone input and actual recognition need a physical-phone check, which is Pending for the owner (not run in the Linux implementation environment).
 
 ## Response playback
 

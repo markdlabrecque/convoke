@@ -1,6 +1,6 @@
 # Convoke server
 
-The server sends each spoken turn to an OpenAI-compatible chat endpoint and speaks the reply. It began as the spoken-echo first slice (`first-slice.md` in the work root); the echo is gone. Kokoro speech comes later (`plan.md`). The setup and verification guide is `development.md` in the same work root.
+The server sends each spoken turn to an OpenAI-compatible chat endpoint and speaks the reply. It began as the spoken-echo first slice (`first-slice.md`, not tracked in this repository); the echo is gone. Kokoro speech comes later (`plan.md`). The setup and verification guide is [`docs/development.md`](../docs/development.md).
 
 ## Run
 

@@ -90,7 +90,7 @@ final class ResponseLifecycleTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
-                                    timer: DeadlineTimer(), player: player,
+                                    timer: DeadlineTimer(), silenceTimer: DeadlineTimer(), player: player,
                                     log: { [weak self] in self?.logs.append($0) })
         session.serverURL = "ws://localhost:8080/conversation"
         await session.connect()
@@ -206,6 +206,60 @@ final class ResponseLifecycleTests: XCTestCase {
         session.disconnect()
     }
 
+    func testConversationListensAgainOnlyAfterCompletePlayback() async {
+        await setup()
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 1)
+        await session.submitCapture()
+        XCTAssertEqual(session.state, .waiting)
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        XCTAssertEqual(speech.starts, 1, "No listening while the reply plays")
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertTrue(session.isConversationActive)
+        // A second automatic turn.
+        await session.submitCapture()
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 3)
+        XCTAssertEqual(transport.sent.count, 2)
+        XCTAssertTrue(logs.isEmpty)
+        session.disconnect()
+    }
+
+    func testEndConversationDuringPlaybackStopsAudioAndDoesNotListen() async {
+        await setup()
+        await session.startConversation()
+        await session.submitCapture()
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        session.endConversation()
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertGreaterThan(player.stops, 0)
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertEqual(session.state, .ready)
+        session.disconnect()
+    }
+
+    func testEndConversationWhileWaitingClosesConnectionBecauseTurnCannotBeCancelled() async {
+        await setup()
+        await session.startConversation()
+        await session.submitCapture()
+        XCTAssertEqual(session.state, .waiting)
+        session.endConversation()
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(speech.starts, 1)
+    }
+
     func testReceiveFailureDisconnectsWithoutAutomaticReconnect() async {
         await setup()
         while transport.pending == nil { await Task.yield() }
@@ -272,7 +326,7 @@ private final class ResponsePlayer: ConversationPlayer {
 @MainActor
 private final class ResponseSpeech: SpeechCapture {
     var starts = 0
-    func start(onFailure: @escaping () -> Void) async throws { starts += 1 }
+    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws { starts += 1 }
     func finish() async throws -> String { "hello" }
     func cancel() {}
 }

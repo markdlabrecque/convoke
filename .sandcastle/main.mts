@@ -8,7 +8,7 @@ import { parseArgs } from "node:util";
 import { PARKED, readRuns, setProject, setStage, TERMINAL } from "./board.mts";
 import { parentText } from "./analyze.mts";
 import { AGENT, allLabels, GRAPH, LABELS, MERGE, SUBTASKS, TRACKER } from "./config.mts";
-import { disallowedModels, ticketModel } from "./models.mts";
+import { disallowedModels, piEnvFor, ticketModel } from "./models.mts";
 import { blockedOutcome, expandUnits, SANDCASTLE_MARK, unitHash } from "./graph.mts";
 import type { ImplementerBlocker } from "./graph.mts";
 import { patchManifest } from "./manifests.mts";
@@ -35,15 +35,14 @@ const CONFIG = {
   noPipelineMinutes: 2,
   // Runs in order inside the container once it is up; the working directory is the worktree.
   sandboxSetup: [],
-  // Runs on the host in Sandcastle's ticket worktree after container verification and before push.
-  hostVerify: ["bash .sandcastle/host-verify.sh"],
+  // Mac/Xcode and physical-device acceptance are performed manually after merge into spike-3.
+  hostVerify: [] as string[],
 };
 const PROJECT = TRACKER.project;
 const IMAGE = CONFIG.image;
-// Pi logs in with the host's own pi login: a fresh ChatGPT OAuth access token (about an hour) minted for
-// each run, or the stored API key if that login is a key. It reaches the container as OPENAI_API_KEY for
-// that one run; no long-lived credential goes into the container or .sandcastle/.env.
-function piCredential(): string {
+// Subscription runs use CLAUDE_CODE_OAUTH_TOKEN from .sandcastle/.env.
+// Only custom openai/ models request a per-run OpenAI credential.
+function openaiCredential(): string {
   for (const cmd of [["print-bearer-token", "--min-expiry", "50m"], ["print-api-key"]]) {
     const res = spawnSync("pi", ["auth", ...cmd, "--provider", "openai"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     if (res.status === 0 && res.stdout.trim()) return res.stdout.trim();
@@ -52,7 +51,7 @@ function piCredential(): string {
 }
 // Called as each run starts, so each run gets its own fresh token.
 const agent = (model: string) =>
-  AGENT.provider === "pi" ? pi(model, { thinking: AGENT.thinking, env: { OPENAI_API_KEY: piCredential() } }) : claudeCode(model);
+  AGENT.provider === "pi" ? pi(model, { thinking: AGENT.thinking, env: piEnvFor(model, openaiCredential) }) : claudeCode(model);
 
 let currentIid: string | undefined;
 let finished = false;
