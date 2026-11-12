@@ -17,7 +17,8 @@ final class WebSocketTransportTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         let controller = SessionController(defaults: defaults, transport: transport,
-                                           recognition: speech, timer: timer, player: TransportTestPlayer())
+                                           recognition: speech, timer: timer, silenceTimer: TransportTestTimer(),
+                                           player: TransportTestPlayer())
         controller.serverURL = url.absoluteString
         await controller.connect()
         XCTAssertEqual(controller.state, .ready)
@@ -229,7 +230,7 @@ private final class LocalWebSocketServer: @unchecked Sendable {
 private final class TransportTestSpeech: SpeechCapture {
     var cancels = 0
     var finishes = 0
-    func start(onFailure: @escaping () -> Void) async throws {}
+    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {}
     func finish() async throws -> String { finishes += 1; return "must not send" }
     func cancel() { cancels += 1 }
 }
