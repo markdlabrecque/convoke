@@ -2,14 +2,15 @@
 
 Developer-only. There is no authentication or TLS on the server or the app. Use a trusted tailnet and restrict access on the Mac (firewall, tailnet ACLs). Tailscale does not protect other reachable interfaces.
 
-Scope of this guide: slice 3, hands-free foreground turns (parent ticket #17; implementation #18; this checklist #19). Out of scope: barge-in, streaming TTS, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit, cloud recognition fallback.
+Scope of this guide: slice 3, hands-free foreground turns (parent ticket #17; implementation #18; this checklist #19), plus separate Kokoro verification for #23. Out of scope: barge-in, streaming TTS, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit, cloud recognition fallback.
 
 ## Requirements
 
 - A Mac with Xcode that supports iOS 26 and macOS 26 SDKs, plus `xcodegen` if the project configuration changes.
 - Swift 6.4 or later for `server/` (see `server/Package.resolved`).
 - A physical iPhone on iOS 26 or later with Developer Mode enabled, signed into the same Tailscale tailnet as the Mac.
-- An OpenAI-compatible chat endpoint reachable from the Mac (for example Ollama or llama.cpp). Optional: the Kokoro sidecar for speech (see `server/README.md`).
+- An OpenAI-compatible chat endpoint reachable from the Mac (for example Ollama or llama.cpp).
+- For Kokoro verification, Docker running on the Mac and the CPU sidecar in `server/README.md`. Kokoro is optional for ordinary development but required for the separate #23 checks.
 
 ## Mac setup
 
@@ -19,11 +20,14 @@ Scope of this guide: slice 3, hands-free foreground turns (parent ticket #17; im
    ```sh
    export CONVOKE_AGENT_BASE_URL=http://localhost:11434/v1
    export CONVOKE_AGENT_MODEL=llama3.2
-   # Optional Kokoro, bound to 127.0.0.1 only:
-   # export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
+   # For Kokoro verification, start the Docker sidecar first, as in server/README.md.
+   export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
+   unset CONVOKE_KOKORO_VOICE # default af_heart
    cd server
    swift run ConvokeServer serve
    ```
+
+   To use the macOS voice instead, unset `CONVOKE_KOKORO_URL` before starting Convoke. This does not count as Kokoro verification. Restart the server whenever changing its voice configuration.
 
 3. Confirm the server listens on `0.0.0.0:8080` and that the Mac firewall only allows the tailnet.
 4. Open `ios/Convoke/Convoke.xcodeproj`, scheme `Convoke`. Select your development team under Signing & Capabilities (signing is not tied to any account), choose the iPhone as destination, and run.
@@ -129,6 +133,38 @@ Result column: `Pending`, `Pass` or `Fail`, with notes.
 | 21 | Tap Disconnect during a conversation | Everything stops; status Disconnected | Pass, owner-reported physical-device check |
 | 22 | Speak a very long turn if possible (over 4096 UTF-8 bytes) | "That was too long to send" appears and listening continues; nothing is sent | Pass |
 | 23 | Review the Xcode device console and server log after a session | No transcript or reply text and no audio in either log | Pass |
+
+## Kokoro verification
+
+These results are separate from the earlier spike-3 session, whose voice backend was not confirmed. Use the existing complete-reply flow. Do not enable streaming or substitute the macOS voice if Kokoro fails.
+
+Start the localhost-only CPU sidecar using `server/README.md`, wait for `/health` to return `{"status":"healthy"}`, then run:
+
+```sh
+cd server
+CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 CONVOKE_KOKORO_VOICE=af_heart \
+  swift test --filter testKokoroSidecarSmoke
+```
+
+The smoke test uses a stub agent. For real replies, start Ollama with `llama3.2` installed and start Convoke with all three variables from Mac setup, including `CONVOKE_KOKORO_URL`. Connect the physical iPhone, tap Start conversation once, and complete three consecutive turns without touching the phone. Each reply must play fully, then Listening must resume automatically. Use a follow-up that depends on an earlier turn to check retained agent context. End the conversation after the third reply. Record outcomes only, not words spoken or audio.
+
+### Recorded Kokoro results
+
+Local checks run by the coding agent during the November 11-12 2026 session. The Kokoro smoke test ran November 11 at 23:15 MST. Checks were based on commit `7da5bb3bdd9c936485b4b74dbceee9de8122ddde` on `issue-23-kokoro-verification`, with documentation edits and the owner's untracked `bash.sh`. Mac: Apple M4 Pro, macOS 27.0.1, Swift 6.4.2, Docker Engine 29.8.2. No application code or protocol changes were needed.
+
+| Check | Status | Actual result |
+| --- | --- | --- |
+| CPU sidecar image | Pass | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.10.0`, pulled digest `sha256:f54c5960c2b9387f6349080a9944f8bc7e8cdb98a4ef9238cb0b0f9ff9795f44`; container `convoke-kokoro` |
+| Localhost-only binding | Pass | Docker inspect reports `8880/tcp` published only at `127.0.0.1:8880` |
+| Health | Pass | `/health` returned `{"status":"healthy"}` |
+| Real Kokoro smoke test, stub agent | Pass | 1 test, 0 failures. `af_heart`, 102326 non-silent PCM bytes, 2.132 s audio, 7 chunks, first chunk 0.975 s, total 0.977 s |
+| Real agent reply through Kokoro, local WebSocket | Pass | Ollama `llama3.2:latest`, Kokoro `af_heart`; nonempty agent text followed by 401710 non-silent PCM bytes, 25 sequential chunks and matching `agent.done`; total 5.457 s. No transcript or audio saved by the check. Not iPhone playback evidence. |
+| Server build and full suite with real Kokoro enabled | Pass | November 12 at 05:51 MST. `swift build`, then `CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 CONVOKE_KOKORO_VOICE=af_heart swift test`. Exit 0; 35 tests, 1 skipped, 0 failures. Only the optional macOS voice smoke test skipped. Kokoro rerun produced 102496 bytes in 7 chunks, first chunk 0.795 s, total 0.800 s. |
+| Physical iPhone turn 1 | Pass | Owner confirmed a real reply played fully and Listening resumed without touching the phone |
+| Physical iPhone turn 2 | Pass | Owner confirmed another complete reply and automatic return to Listening |
+| Physical iPhone turn 3 | Pass | Owner confirmed a third complete reply and automatic return to Listening, with earlier context retained |
+
+The owner reported all three physical turns passing on November 12 2026 and confirmed the same iPhone 17 / iOS 27.0.1 and M4 Pro / macOS 27.0.1 / Xcode 27.2 environment. Convoke ran from the base commit above with documentation-only working-tree edits, configured explicitly for local Ollama `llama3.2` and Kokoro `af_heart`. Ollama and Convoke were started in separate Rex tabs in the Convoke session. Physical results are owner-reported, not independently observed by the coding agent, and were not copied from the earlier session. All #23 checks passed.
 
 ## Reporting
 

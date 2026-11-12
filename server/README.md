@@ -1,10 +1,10 @@
 # Convoke server
 
-The server sends each spoken turn to an OpenAI-compatible chat endpoint and speaks the reply. It began as the spoken-echo first slice (`first-slice.md`, not tracked in this repository); the echo is gone. Kokoro speech comes later (`plan.md`). The setup and verification guide is [`docs/development.md`](../docs/development.md).
+The server sends each spoken turn to an OpenAI-compatible chat endpoint and speaks the complete reply through Kokoro when configured, or the macOS voice otherwise. The setup and verification guide is [`docs/development.md`](../docs/development.md).
 
 ## Run
 
-Use a Mac running macOS 13 or later, with an installed system speech voice and Swift 6.4 or later. The committed dependency resolution currently requires Swift 6.4.
+Use a Mac running macOS 13 or later with Swift 6.4 or later, plus either the Docker Kokoro sidecar below or an installed system speech voice. The committed dependency resolution currently requires Swift 6.4.
 
 Set the agent first. The server will not start without these:
 
@@ -49,12 +49,15 @@ Run the CPU sidecar in Docker, bound to this machine only. The server has no aut
 
 ```sh
 docker run -d --rm --name convoke-kokoro -p 127.0.0.1:8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:v0.10.0
-curl http://127.0.0.1:8880/health   # wait for {"status":"healthy"}
+curl --fail http://127.0.0.1:8880/health   # retry until {"status":"healthy"}
 export CONVOKE_KOKORO_URL=http://127.0.0.1:8880
-docker stop convoke-kokoro          # when done
+unset CONVOKE_KOKORO_VOICE               # use the default af_heart
+# Start Convoke in this shell using the Run instructions above.
+# In another shell, when finished with Convoke:
+# docker stop convoke-kokoro
 ```
 
-The same command works on a Mac. If the sidecar runs on another machine, use a tailnet address and keep it off every other interface. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn with WebSocket code 1011 (server error); there is no fallback to another voice. The sidecar must answer with an `audio/pcm` content type; anything else (MP3, WAV) is rejected.
+The same command works on an Apple Silicon Mac. Docker must be running; the first pull and startup can take time. Keep this development sidecar local and verify the published binding with `docker port convoke-kokoro`, which must show `127.0.0.1:8880`. Restart Convoke after setting the environment variables; exporting them in a different shell does not change an already-running server. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn with WebSocket code 1011 (server error); there is no fallback to another voice. The sidecar must answer with an `audio/pcm` content type; anything else (MP3, WAV) is rejected.
 
 ## Internal exchange
 
@@ -64,7 +67,7 @@ Send a JSON text message containing only `type` and `text`:
 {"type":"user.text","text":"hello"}
 ```
 
-The server trims whitespace and sends the text, with this connection's earlier turns, to the agent. A short system prompt asks for brief, plain spoken replies without markdown. The whole reply goes back as `agent.text`. The server synthesizes it with the default macOS voice, converts it with `AVAudioConverter`, and sends:
+The server trims whitespace and sends the text, with this connection's earlier turns, to the agent. A short system prompt asks for brief, plain spoken replies without markdown. The whole reply goes back as `agent.text`. The server synthesizes the complete reply with Kokoro when `CONVOKE_KOKORO_URL` is set. Otherwise, on a Mac, it uses the macOS voice and converts it with `AVAudioConverter`. Only after synthesis completes does it send:
 
 - `agent.audio` with zero-based `sequence` and base64 `data`. The decoded bytes are headerless, 24 kHz mono signed 16-bit little-endian PCM.
 - `agent.done` with `chunks` equal to the number of audio messages sent.
@@ -73,7 +76,7 @@ Wait for `agent.done` before sending another turn. Playback and microphone contr
 
 Limits are 4096 UTF-8 bytes of trimmed input, 32768 UTF-8 bytes per JSON message, 16384 decoded bytes per audio chunk, and 8 MiB of accumulated PCM per turn. Fragmented incoming messages share the same 32768-byte limit. A turn has a 120-second deadline, including synthesis and writes. Invalid input, binary messages, overlapping turns, conversion or synthesis errors, oversized audio, and timeouts close the connection. A close handshake has a one-second deadline, after which TCP is forcibly closed even if the peer does not acknowledge or a write is stalled. No further application or ping messages are processed while closing. Client frames must be masked and must not set reserved bits, since no extensions are negotiated. A disconnect cancels synthesis and releases the conversation. Reconnecting starts a new session; interrupted turns are not resumed.
 
-Transcripts and audio stay in memory. The application neither writes them to disk nor logs transcript content. Each connection keeps its own history in memory (the last 40 messages) and drops it on disconnect. Logs carry sizes and status codes, never transcript or reply text. If the endpoint is unreachable, returns an error, or sends an empty reply, the server logs the reason and closes the connection with WebSocket code 1011 (server error). It never falls back to an echo. There is no voice selection or Kokoro yet; the agent request is not streamed.
+Transcripts and audio stay in memory. The application neither writes them to disk nor logs transcript content. Each connection keeps its own history in memory (the last 40 messages) and drops it on disconnect. Logs carry sizes and status codes, never transcript or reply text. If the endpoint is unreachable, returns an error, or sends an empty reply, the server logs the reason and closes the connection with WebSocket code 1011 (server error). It never falls back to an echo. Kokoro voice selection uses `CONVOKE_KOKORO_VOICE`; neither agent generation nor synthesis playback is streamed.
 
 ## Tests
 
@@ -91,4 +94,4 @@ CONVOKE_TEST_SYSTEM_VOICE=1 swift test
 
 The default XCTest suite injects the agent and synthesis and needs no audio hardware or model. A stubbed endpoint checks the agent request shape, auth header and error handling. It covers validation, wire and fragmented-message limits, invalid UTF-8, ordering and chunk counts, sequential turns, failure closure, timeout and disconnect cancellation. Regression tests check conversation deallocation, unacknowledged close handshakes, stalled writes, and masking/reserved-bit violations on complete and fragmented wire frames. Converter tests use generated PCM buffers to check resampling, mono Int16 little-endian output, and the cap during accumulation. Tests bind loopback on an ephemeral port, regardless of the run-time host and port configuration.
 
-The opt-in voice check verifies non-silent PCM, not physical iPhone playback or Tailscale connectivity. Those remain separate first-slice acceptance checks.
+The Kokoro smoke test uses a stub agent with the real sidecar. It verifies non-silent PCM over a local WebSocket, not real agent generation, physical iPhone playback or Tailscale connectivity. Record those separately in the [Kokoro verification checklist](../docs/development.md#kokoro-verification).
