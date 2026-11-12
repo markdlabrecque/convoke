@@ -1,4 +1,5 @@
 import XCTest
+import NIOCore
 import Vapor
 @testable import ConvokeServer
 
@@ -40,22 +41,55 @@ final class KokoroTests: XCTestCase {
         }
     }
 
+    @MainActor func testStreamRequestShapeAndPiecesConcatenate() async throws {
+        let parts = [Data([1, 2, 3]), Data([4, 5]), Data([6, 7, 8, 9])]  // a sample split across parts
+        let stub = Stub()
+        let audio = try await withStub(stub, status: .ok, body: Data(), streaming: parts) { synthesizer in
+            var all = Data()
+            for try await piece in try await synthesizer.stream("hello there") { all.append(piece) }
+            return all
+        }
+        XCTAssertEqual(audio, Data(parts.joined()))
+        XCTAssertEqual(stub.path, "/v1/audio/speech")
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stub.body.utf8)) as? [String: Any])
+        XCTAssertEqual(object["input"] as? String, "hello there")
+        XCTAssertEqual(object["response_format"] as? String, "pcm")
+        XCTAssertEqual(object["stream"] as? Bool, true)
+    }
+
+    @MainActor func testStreamErrorsAreThrownBeforeAnyAudio() async throws {
+        let cases: [(HTTPStatus, String)] = [(.internalServerError, "audio/pcm"), (.ok, "audio/mpeg"), (.ok, "audio/wav")]
+        for (status, type) in cases {
+            do {
+                _ = try await withStub(Stub(), status: status, body: Data([0, 0]), type: type) { _ = try await $0.stream("x") }
+                XCTFail("Expected an error for \(status) \(type)")
+            } catch is SpeechError {}
+        }
+    }
+
     final class Stub: @unchecked Sendable { var path = "", body = "" }
 
-    @MainActor private func withStub(
-        _ stub: Stub, status: HTTPStatus, body: Data, type: String = "audio/pcm", _ run: (KokoroSpeechSynthesizer) async throws -> Data
-    ) async throws -> Data {
+    @MainActor private func withStub<T>(
+        _ stub: Stub, status: HTTPStatus, body: Data, type: String = "audio/pcm", streaming: [Data]? = nil,
+        _ run: (KokoroSpeechSynthesizer) async throws -> T
+    ) async throws -> T {
         let app = try await Application.make(.testing)
         do {
             app.post("v1", "audio", "speech") { request -> Response in
                 stub.path = request.url.path
                 stub.body = request.body.string ?? ""
+                if let streaming {
+                    return Response(status: status, headers: ["content-type": type], body: .init(asyncStream: { writer in
+                        for part in streaming { try await writer.write(.buffer(ByteBuffer(bytes: part))) }
+                        try await writer.write(.end)
+                    }))
+                }
                 return Response(status: status, headers: ["content-type": type], body: .init(data: body))
             }
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let config = try XCTUnwrap(KokoroConfig(environment: ["CONVOKE_KOKORO_URL": "http://127.0.0.1:\(port)"]))
-            let result = try await run(KokoroSpeechSynthesizer(client: app.client, config: config))
+            let result = try await run(KokoroSpeechSynthesizer(client: app.client, config: config, http: app.http.client.shared))
             await app.server.shutdown()
             try await app.asyncShutdown()
             return result
