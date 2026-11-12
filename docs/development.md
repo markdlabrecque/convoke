@@ -50,29 +50,33 @@ Status values are `Pending` (not run), `Pass`, or `Fail`. Only the owner changes
 
 | Check | Where run | Status | Output / notes |
 | --- | --- | --- | --- |
-| `swift build` and `swift test` in `server/` | Mac | Pending | |
-| `swift test` in `ios/Convoke` | Mac, macOS 26 | Pending | |
-| `xcodebuild ... build-for-testing` (simulator) | Mac | Pending | |
-| `xcodebuild ... -sdk iphoneos build` (device, unsigned) | Mac | Pending | |
+| `swift build` and `swift test` in `server/` | Mac, macOS 27.0.1 | Pass | Exit 0; 35 tests, 2 skipped, 0 failures. Optional real Kokoro and system-voice smoke tests not enabled. |
+| `swift test` in `ios/Convoke` | Mac, macOS 27.0.1 | Pass | Exit 0; 64 tests, 0 failures. |
+| `xcodebuild ... build-for-testing` (simulator) | Mac, Xcode 27.2 | Pass | Exit 0; `** TEST BUILD SUCCEEDED **`. Compiled tests only; no simulator test execution. |
+| `xcodebuild ... -sdk iphoneos build` (device, unsigned) | Mac, Xcode 27.2 | Pass | Exit 0; `** BUILD SUCCEEDED **`. |
 | `node --test .sandcastle/models.test.mts` | Linux container (#19 implementation) | Pass | 7 tests, 7 pass, 0 fail |
 | Protocol JSON syntax check | Linux container (#19 implementation) | Pass (vacuous) | 0 files under `protocol/`; nothing to validate |
 
 The Linux container used for the documentation task has no Swift, Xcode or Apple SDKs, so no Swift check was run there.
 
+The four Mac checks above were run locally by the coding agent at the owner's request on 2026-11-11 at 22:41 MST, against commit `73e6d960b7ed2c55583ab1d75f3b37ab94428569`, with documentation edits and an untracked `bash.sh` present. Environment: macOS 27.0.1, Xcode 27.2 (27B52), Apple Swift 6.4.2. Full command output is in `/tmp/convoke-mac-checks.kpGeOc/{server,ios-package,simulator,device}.log`; these local temporary files are not committed.
+
 ## Physical-iPhone acceptance checklist
 
 Run on the physical iPhone against the Mac server, after the automated checks. Every row starts as Pending. Record the date, iPhone model, iOS version, Mac/Xcode version, commit SHA, and per-row result. Never paste transcript text or audio into notes; describe outcomes only (for example "second turn played").
 
-Test environment (fill in):
+The owner confirms that all 23 physical-device checklist checks passed, including the 11 detailed checks not covered by the initial grouped report. All physical results below are owner-reported, not independently observed by the coding agent. The four required Mac automated checks also passed as recorded above. All required checklist rows are now Pass. The voice backend used for the physical session remains unconfirmed.
+
+Recorded test environment:
 
 | Field | Value |
 | --- | --- |
-| Date | |
-| Commit SHA | |
-| iPhone model / iOS version | |
-| Mac / macOS / Xcode version | |
-| Agent endpoint and model | |
-| Voice (macOS or Kokoro) | |
+| Date | November 11 2026 |
+| Commit SHA | 73e6d96 |
+| iPhone model / iOS version | iPhone 17 / iOS 27.0.1 |
+| Mac / macOS / Xcode version | Apple M4 Pro / Golden Gate 27.0.1 / 27.2 |
+| Agent endpoint and model | Ollama / Llama3.2 |
+| Voice (macOS or Kokoro) | Not confirmed by owner |
 
 Result column: `Pending`, `Pass` or `Fail`, with notes.
 
@@ -80,44 +84,44 @@ Result column: `Pending`, `Pass` or `Fail`, with notes.
 
 | # | Check | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Enter `ws://<Mac Tailscale IP>:8080/conversation`, relaunch the app | URL is remembered; it is the only saved setting | Pending |
-| 2 | Tap Connect | Status Connected. The microphone indicator is not on and no permission prompt appears | Pending |
-| 3 | Tap Start conversation on first run | Microphone permission prompt appears; allow it | Pending |
-| 4 | First run with no speech model installed | "Preparing speech recognition" shows while the model downloads, then Listening | Pending |
-| 5 | Tap End conversation, then Start conversation again with the model installed | No download state; Listening begins promptly | Pending |
+| 1 | Enter `ws://<Mac Tailscale IP>:8080/conversation`, relaunch the app | URL is remembered; it is the only saved setting | Pass |
+| 2 | Tap Connect | Status Connected. The microphone indicator is not on and no permission prompt appears | Pass, owner-reported physical-device check |
+| 3 | Tap Start conversation on first run | Microphone permission prompt appears; allow it | Pass, owner-reported physical-device check |
+| 4 | First run with no speech model installed | "Preparing speech recognition" shows while the model downloads, then Listening | Pass, owner-reported physical-device check |
+| 5 | Tap End conversation, then Start conversation again with the model installed | No download state; Listening begins promptly | Pass |
 
 ### Hands-free turns
 
 | # | Check | Expected | Result |
 | --- | --- | --- | --- |
-| 6 | Say a short sentence and stay silent | Submission about 2.5 s after you stop; status goes Finishing, Waiting for reply, Playing reply | Pending |
-| 7 | Pause briefly (under 2.5 s) mid-sentence, then continue | One turn, not split at the pause | Pending |
-| 8 | Stay silent before speaking for 10 s or more | No submission and no silence countdown until speech is heard | Pending |
-| 9 | Wait for the full reply | Complete reply plays, then status returns to Listening without touching the phone | Pending |
-| 10 | Complete at least three consecutive turns without touching the phone | Each turn is sent, answered and played; the agent has context from earlier turns | Pending |
-| 11 | Keep talking for more than 60 s | The turn is submitted at the 60 s limit (note whether any words were sent) | Pending |
-| 12 | Stay silent for 60 s | Nothing is sent; the app keeps listening, no error | Pending |
-| 13 | Confirm there is no Submit button and no volatile/partial text is sent (compare spoken words with the agent's reaction) | Only finalized words are submitted | Pending |
+| 6 | Say a short sentence and stay silent | Submission about 2.5 s after you stop; status goes Finishing, Waiting for reply, Playing reply | Pass, owner-reported physical-device check |
+| 7 | Pause briefly (under 2.5 s) mid-sentence, then continue | One turn, not split at the pause | Pass, owner-reported physical-device check |
+| 8 | Stay silent before speaking for 10 s or more | No submission and no silence countdown until speech is heard | Pass |
+| 9 | Wait for the full reply | Complete reply plays, then status returns to Listening without touching the phone | Pass, owner-reported physical-device check |
+| 10 | Complete at least three consecutive turns without touching the phone | Each turn is sent, answered and played; the agent has context from earlier turns | Pass, owner-reported physical-device check |
+| 11 | Keep talking for more than 60 s | The turn is submitted at the 60 s limit (note whether any words were sent) | Pass |
+| 12 | Stay silent for 60 s | Nothing is sent; the app keeps listening, no error | Pass |
+| 13 | Confirm there is no Submit button and no volatile/partial text is sent (compare spoken words with the agent's reaction) | Only finalized words are submitted | Pass |
 
 ### End conversation
 
 | # | Check | Expected | Result |
 | --- | --- | --- | --- |
-| 14 | Tap End conversation while Listening | Listening stops, microphone indicator turns off, status Connected, connection stays open | Pending |
-| 15 | Tap End conversation while Playing reply | Audio stops immediately; no new listening; connection stays open | Pending |
-| 16 | Tap End conversation while Waiting for reply | Connection closes (protocol cannot cancel a turn); status Disconnected | Pending |
-| 17 | After 14 or 15, tap Start conversation again | A new conversation starts without reconnecting | Pending |
+| 14 | Tap End conversation while Listening | Listening stops, microphone indicator turns off, status Connected, connection stays open | Pass, owner-reported physical-device check |
+| 15 | Tap End conversation while Playing reply | Audio stops immediately; no new listening; connection stays open | Pass, owner-reported physical-device check |
+| 16 | Tap End conversation while Waiting for reply | Connection closes (protocol cannot cancel a turn); status Disconnected | Pass, owner-reported physical-device check |
+| 17 | After 14 or 15, tap Start conversation again | A new conversation starts without reconnecting | Pass |
 
 ### Errors and lifecycle
 
 | # | Check | Expected | Result |
 | --- | --- | --- | --- |
-| 18 | Deny microphone permission in Settings, tap Start conversation | Visible message that microphone access is denied; app returns to Connected; no retry loop | Pending |
-| 19 | Stop the server while Listening or Playing | Visible connection error; app shows Disconnected; no automatic reconnect | Pending |
-| 20 | Background the app during a conversation | Capture and playback stop and the connection closes; no background audio | Pending |
-| 21 | Tap Disconnect during a conversation | Everything stops; status Disconnected | Pending |
-| 22 | Speak a very long turn if possible (over 4096 UTF-8 bytes) | "That was too long to send" appears and listening continues; nothing is sent | Pending |
-| 23 | Review the Xcode device console and server log after a session | No transcript or reply text and no audio in either log | Pending |
+| 18 | Deny microphone permission in Settings, tap Start conversation | Visible message that microphone access is denied; app returns to Connected; no retry loop | Pass |
+| 19 | Stop the server while Listening or Playing | Visible connection error; app shows Disconnected; no automatic reconnect | Pass |
+| 20 | Background the app during a conversation | Capture and playback stop and the connection closes; no background audio | Pass, owner-reported physical-device check |
+| 21 | Tap Disconnect during a conversation | Everything stops; status Disconnected | Pass, owner-reported physical-device check |
+| 22 | Speak a very long turn if possible (over 4096 UTF-8 bytes) | "That was too long to send" appears and listening continues; nothing is sent | Pass |
+| 23 | Review the Xcode device console and server log after a session | No transcript or reply text and no audio in either log | Pass |
 
 ## Reporting
 
