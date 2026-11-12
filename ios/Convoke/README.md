@@ -11,7 +11,7 @@ cd ios/Convoke
 xcodegen generate
 ```
 
-For the complete Mac/Tailscale setup, recorded automated results, and physical-iPhone acceptance checklist, see `development.md` in the work root (developer setup and verification).
+For the complete Mac/Tailscale setup, recorded automated results, and physical-iPhone acceptance checklist, see [`docs/development.md`](../../docs/development.md) (developer setup and verification).
 
 ## Conversation flow
 
