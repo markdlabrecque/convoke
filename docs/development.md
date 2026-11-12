@@ -40,6 +40,10 @@ xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
   CODE_SIGNING_ALLOWED=NO build-for-testing
 xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
   -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+# Choose an available simulator from xcrun simctl list devices available.
+xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.2' \
+  CODE_SIGNING_ALLOWED=NO test
 ```
 
 `swift test` in `ios/Convoke` needs macOS 26 because `SpeechAnalyzer` requires it. Controller and adapter tests use fakes and need no microphone, speech model, phone or external server.
@@ -54,6 +58,7 @@ Status values are `Pending` (not run), `Pass`, or `Fail`. Only the owner changes
 | `swift test` in `ios/Convoke` | Mac, macOS 27.0.1 | Pass | Exit 0; 64 tests, 0 failures. |
 | `xcodebuild ... build-for-testing` (simulator) | Mac, Xcode 27.2 | Pass | Exit 0; `** TEST BUILD SUCCEEDED **`. Compiled tests only; no simulator test execution. |
 | `xcodebuild ... -sdk iphoneos build` (device, unsigned) | Mac, Xcode 27.2 | Pass | Exit 0; `** BUILD SUCCEEDED **`. |
+| `xcodebuild ... test` (simulator execution) | Mac, Xcode 27.2; iPhone 17 simulator, iOS 27.2 | Pass | Exit 0; 58 tests, 0 failures; `** TEST SUCCEEDED **`. |
 | `node --test .sandcastle/models.test.mts` | Linux container (#19 implementation) | Pass | 7 tests, 7 pass, 0 fail |
 | Protocol JSON syntax check | Linux container (#19 implementation) | Pass (vacuous) | 0 files under `protocol/`; nothing to validate |
 
@@ -61,11 +66,13 @@ The Linux container used for the documentation task has no Swift, Xcode or Apple
 
 The four Mac checks above were run locally by the coding agent at the owner's request on 2026-11-11 at 22:41 MST, against commit `73e6d960b7ed2c55583ab1d75f3b37ab94428569`, with documentation edits and an untracked `bash.sh` present. Environment: macOS 27.0.1, Xcode 27.2 (27B52), Apple Swift 6.4.2. Full command output is in `/tmp/convoke-mac-checks.kpGeOc/{server,ios-package,simulator,device}.log`; these local temporary files are not committed.
 
+Simulator tests were subsequently executed locally on 2026-11-11 at 23:00 MST against commit `20ad871`, using destination `platform=iOS Simulator,id=E58183BA-D034-4773-B504-D1053EE3141E`. Output: `/tmp/convoke-mac-checks.kpGeOc/simulator-tests.log`. All five Mac checks now pass.
+
 ## Physical-iPhone acceptance checklist
 
 Run on the physical iPhone against the Mac server, after the automated checks. Every row starts as Pending. Record the date, iPhone model, iOS version, Mac/Xcode version, commit SHA, and per-row result. Never paste transcript text or audio into notes; describe outcomes only (for example "second turn played").
 
-The owner confirms that all 23 physical-device checklist checks passed, including the 11 detailed checks not covered by the initial grouped report. All physical results below are owner-reported, not independently observed by the coding agent. The four required Mac automated checks also passed as recorded above. All required checklist rows are now Pass. The voice backend used for the physical session remains unconfirmed.
+The owner confirms that all 23 physical-device checklist checks passed, including the 11 detailed checks not covered by the initial grouped report. All physical results below are owner-reported, not independently observed by the coding agent. All five required Mac automated checks, including simulator execution, also passed as recorded above. All required checklist rows are now Pass. The voice backend used for the physical session remains unconfirmed.
 
 Recorded test environment:
 
