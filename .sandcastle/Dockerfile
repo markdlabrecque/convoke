@@ -21,3 +21,4 @@ RUN mkdir -p /home/agent/.pi/agent/extensions \
     && git checkout "$PI_SUBSCRIPTION_COMMIT" \
     && npm ci --omit=dev --ignore-scripts
 WORKDIR /home/agent/workspace
+CMD ["sleep", "infinity"]
