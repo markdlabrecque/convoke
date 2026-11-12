@@ -2,13 +2,21 @@ import Foundation
 
 public enum ResponseError: Error { case invalid }
 
-/// A single response, discarded on completion or disconnect.
+/// What one valid frame means. Audio is handed on as it arrives, not kept.
+enum ResponseEvent: Equatable {
+    case text
+    case audio(Data)
+    case done
+}
+
+/// Validates the frames of a single response, in order. Holds counts only, never audio.
+/// Discarded on completion or disconnect.
 struct ResponseAccumulator {
     private var hasText = false
     private var chunks = 0
-    private var audio = Data()
+    private var audioBytes = 0
 
-    mutating func consume(_ frame: URLSessionWebSocketTask.Message) throws -> Data? {
+    mutating func consume(_ frame: URLSessionWebSocketTask.Message) throws -> ResponseEvent {
         guard case .string(let text) = frame, text.utf8.count <= 32768 else {
             throw ResponseError.invalid
         }
@@ -20,21 +28,22 @@ struct ResponseAccumulator {
                 throw ResponseError.invalid
             }
             hasText = true
+            return .text
         case "agent.audio":
             guard hasText, message.keys == ["type", "sequence", "data"],
                   message.sequence == chunks, let encoded = message.data,
                   let data = Data(base64Encoded: encoded), !data.isEmpty,
                   data.count <= 16384, data.count.isMultiple(of: 2),
-                  audio.count + data.count <= 8 * 1024 * 1024 else { throw ResponseError.invalid }
-            audio.append(data)
+                  audioBytes + data.count <= 8 * 1024 * 1024 else { throw ResponseError.invalid }
+            audioBytes += data.count
             chunks += 1
+            return .audio(data)
         case "agent.done":
             guard hasText, message.keys == ["type", "chunks"],
                   message.chunks == chunks, chunks > 0 else { throw ResponseError.invalid }
-            return audio
+            return .done
         default: throw ResponseError.invalid
         }
-        return nil
     }
 
     private struct Message: Decodable {

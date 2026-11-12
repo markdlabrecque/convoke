@@ -590,6 +590,8 @@ private final class FakeTimer: CaptureTimer {
 @MainActor
 private final class FakePlayer: ConversationPlayer {
     var stops = 0
-    func play(pcm: Data) async throws {}
+    func beginStream() throws {}
+    func enqueue(pcm: Data) throws {}
+    func endStream() async throws {}
     func stop() { stops += 1 }
 }

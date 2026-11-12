@@ -1,4 +1,7 @@
+import AsyncHTTPClient
 import Foundation
+import NIOCore
+import NIOHTTP1
 import Vapor
 
 enum SpeechError: Error, CustomStringConvertible {
@@ -42,6 +45,8 @@ struct KokoroConfig: Sendable {
 struct KokoroSpeechSynthesizer: SpeechSynthesizer {
     let client: any Client
     let config: KokoroConfig
+    /// The shared AsyncHTTPClient, used for the streamed response body.
+    let http: HTTPClient
 
     private struct Request: Content {
         var model = "kokoro"
@@ -67,5 +72,32 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         do { try ConversationProtocol.validateAudio(audio) }
         catch { throw SpeechError.badResponse("not whole 16-bit samples or over the size limit (\(audio.count) bytes)") }
         return audio
+    }
+
+    /// Asks Kokoro to stream and hands the PCM on as it arrives. The consumer pulls: nothing is
+    /// read from the sidecar ahead of what the caller has taken. Cancelling the consuming task
+    /// cancels the request. Non-200 and non-PCM responses fail before any audio is returned.
+    @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error> {
+        var request = HTTPClientRequest(url: config.baseURL + "/v1/audio/speech")
+        request.method = .POST
+        request.headers.add(name: "content-type", value: "application/json")
+        request.body = .bytes(try JSONEncoder().encode(Request(input: text, voice: config.voice, stream: true)))
+        let response = try await http.execute(request, timeout: .seconds(120))
+        guard response.status == .ok else { throw SpeechError.http(status: response.status.code) }
+        let type = response.headers.first(name: "content-type")?.lowercased().split(separator: ";").first.map(String.init) ?? "none"
+        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type \(type) is not raw PCM") }
+        let body = BodyPuller(response.body)
+        return AsyncThrowingStream<Data, Error>(unfolding: { try await body.next() })
+    }
+}
+
+/// Pulls one body part at a time. Used by one consumer, which awaits each pull.
+private final class BodyPuller<Body: AsyncSequence>: @unchecked Sendable where Body.Element == ByteBuffer {
+    private var iterator: Body.AsyncIterator
+    init(_ body: Body) { iterator = body.makeAsyncIterator() }
+
+    func next() async throws -> Data? {
+        guard var buffer = try await iterator.next() else { return nil }
+        return buffer.readData(length: buffer.readableBytes) ?? Data()
     }
 }
