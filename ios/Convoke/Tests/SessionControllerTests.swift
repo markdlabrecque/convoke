@@ -8,6 +8,7 @@ final class SessionControllerTests: XCTestCase {
     private var transport: FakeTransport!
     private var speech: FakeSpeech!
     private var timer: FakeTimer!
+    private var silence: FakeTimer!
     private var player: FakePlayer!
     private var session: SessionController!
     private var logs: [String] = []
@@ -18,9 +19,10 @@ final class SessionControllerTests: XCTestCase {
         transport = FakeTransport()
         speech = FakeSpeech()
         timer = FakeTimer()
+        silence = FakeTimer()
         player = FakePlayer()
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
-                                    timer: timer, player: player, log: { [weak self] in self?.logs.append($0) })
+                                    timer: timer, silenceTimer: silence, player: player, log: { [weak self] in self?.logs.append($0) })
         addTeardownBlock { [defaults, defaultsName] in
             defaults?.removePersistentDomain(forName: defaultsName!)
         }
@@ -37,7 +39,8 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(session.serverURL, SessionController.exampleURL)
         session.serverURL = "ws://100.1.2.3:8080/conversation"
         let reloaded = SessionController(defaults: defaults, transport: FakeTransport(),
-                                         recognition: FakeSpeech(), timer: FakeTimer(), player: FakePlayer())
+                                         recognition: FakeSpeech(), timer: FakeTimer(),
+                                         silenceTimer: FakeTimer(), player: FakePlayer())
         XCTAssertEqual(reloaded.serverURL, session.serverURL)
         XCTAssertEqual(defaults.persistentDomain(forName: defaultsName) as? [String: String],
                        [SessionController.urlDefaultsKey: session.serverURL])
@@ -278,6 +281,230 @@ final class SessionControllerTests: XCTestCase {
         oldFailure?()
         XCTAssertEqual(session.state, .recording)
     }
+
+    // MARK: Hands-free conversation
+
+    func testStartConversationListensAndSilenceTimerOnlyRunsAfterSpeech() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        XCTAssertTrue(session.isConversationActive)
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertEqual(session.statusText, "Listening")
+        XCTAssertEqual(timer.seconds, 60)
+        // No speech yet: no silence countdown, so nothing can submit.
+        XCTAssertNil(silence.action)
+        speech.onSpeech?()
+        XCTAssertEqual(silence.seconds, 2.5)
+        XCTAssertNotNil(silence.action)
+        session.disconnect()
+    }
+
+    func testSilenceAfterSpeechSubmitsOnceAndRestartsOnMoreSpeech() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.onSpeech?()
+        let first = silence.action
+        speech.onSpeech?()
+        XCTAssertEqual(silence.schedules, 2, "Each transcript change restarts the countdown")
+        _ = first
+        let sent = expectation(description: "Silence sends a frame")
+        transport.onSend = { sent.fulfill() }
+        silence.fire()
+        await fulfillment(of: [sent], timeout: 2)
+        XCTAssertEqual(transport.sent.count, 1)
+        XCTAssertEqual(session.state, .waiting)
+        XCTAssertNil(timer.action, "Capture limit is cancelled after submission")
+        XCTAssertNil(silence.action)
+        XCTAssertEqual(speech.finishes, 1)
+    }
+
+    func testSpeechCallbackAfterSubmissionDoesNotRestartSilenceTimer() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.onSpeech?()
+        let late = speech.onSpeech
+        await session.submitCapture()
+        XCTAssertEqual(session.state, .waiting)
+        late?()
+        XCTAssertNil(silence.action)
+    }
+
+    func testStaleSilenceTimerCannotSubmitNewCapture() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.onSpeech?()
+        let oldSilence = silence.action
+        session.disconnect()
+        await connect()
+        await session.startConversation()
+        oldSilence?()
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertTrue(transport.sent.isEmpty)
+        session.disconnect()
+    }
+
+    func testCaptureLimitWithoutSpeechKeepsListeningInActiveConversation() async {
+        makeSession()
+        await connect()
+        speech.text = "  "
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 1)
+        timer.fire()
+        while speech.starts < 2 { await Task.yield() }
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertTrue(session.isConversationActive)
+        XCTAssertTrue(transport.sent.isEmpty)
+        session.disconnect()
+    }
+
+    func testFinalizationFailureEndsConversationWithVisibleError() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.finishError = SpeechCaptureError.noFinalResult
+        speech.onSpeech?()
+        await session.submitCapture()
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(session.errorMessage, SpeechCaptureError.noFinalResult.message)
+        XCTAssertTrue(transport.sent.isEmpty)
+        XCTAssertNil(silence.action)
+        XCTAssertEqual(speech.starts, 1, "A failing recognizer must not retry in a loop")
+    }
+
+    func testStartupErrorsAreVisibleAndEndConversation() async {
+        makeSession()
+        await connect()
+        for error in [SpeechCaptureError.microphoneDenied, .unsupportedLocale, .modelPreparationFailed] {
+            speech.startError = error
+            await session.startConversation()
+            XCTAssertEqual(session.state, .ready)
+            XCTAssertFalse(session.isConversationActive)
+            XCTAssertFalse(session.isPreparing)
+            XCTAssertEqual(session.errorMessage, error.message)
+        }
+        // A new attempt clears the old error.
+        speech.startError = nil
+        await session.startConversation()
+        XCTAssertNil(session.errorMessage)
+        session.disconnect()
+    }
+
+    func testPreparationIsVisibleWhileModelIsPrepared() async {
+        makeSession()
+        await connect()
+        speech.holdStart = true
+        let starting = Task { await session.startConversation() }
+        while speech.pendingStart == nil { await Task.yield() }
+        XCTAssertEqual(session.statusText, "Preparing speech recognition")
+        XCTAssertTrue(session.isPreparing)
+        speech.pendingStart?.resume()
+        speech.pendingStart = nil
+        await starting.value
+        XCTAssertFalse(session.isPreparing)
+        XCTAssertEqual(session.statusText, "Listening")
+        session.disconnect()
+    }
+
+    func testConnectDoesNotStartListening() async {
+        makeSession()
+        await connect()
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertFalse(session.isConversationActive)
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 1)
+        session.disconnect()
+    }
+
+    func testStartConversationRequiresReadyAndIsNotReentrant() async {
+        makeSession()
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertFalse(session.isConversationActive)
+        await connect()
+        await session.startConversation()
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 1)
+        session.disconnect()
+    }
+
+    func testEndConversationWhileListeningCancelsCaptureAndKeepsConnection() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.onSpeech?()
+        session.endConversation()
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(speech.cancels, 1)
+        XCTAssertNil(timer.action)
+        XCTAssertNil(silence.action)
+        XCTAssertEqual(transport.disconnects, 0)
+        await session.submitCapture()
+        XCTAssertTrue(transport.sent.isEmpty)
+        // A fresh conversation can start on the same connection.
+        await session.startConversation()
+        XCTAssertEqual(session.state, .recording)
+        session.disconnect()
+    }
+
+    func testEndConversationDuringPreparationIgnoresLateStart() async {
+        makeSession()
+        await connect()
+        speech.holdStart = true
+        let starting = Task { await session.startConversation() }
+        while speech.pendingStart == nil { await Task.yield() }
+        session.endConversation()
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertFalse(session.isPreparing)
+        speech.pendingStart?.resume()
+        speech.pendingStart = nil
+        await starting.value
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertNil(timer.action)
+        session.disconnect()
+    }
+
+    func testEndConversationDuringFinalizationDoesNotSendLateTranscript() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        speech.holdFinish = true
+        let submitting = Task { await session.submitCapture() }
+        while speech.pendingFinish == nil { await Task.yield() }
+        session.endConversation()
+        speech.pendingFinish?.resume(returning: "discard me")
+        speech.pendingFinish = nil
+        await submitting.value
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertTrue(transport.sent.isEmpty)
+        XCTAssertEqual(speech.starts, 1)
+        session.disconnect()
+    }
+
+    func testEndConversationIsNoOpWhenInactive() async {
+        makeSession()
+        await connect()
+        session.endConversation()
+        XCTAssertEqual(speech.cancels, 0)
+        XCTAssertEqual(session.state, .ready)
+    }
+
+    func testDisconnectEndsConversation() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        session.disconnect()
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertFalse(session.isPreparing)
+        XCTAssertNil(silence.action)
+    }
 }
 
 private enum TestError: Error { case failed }
@@ -324,13 +551,17 @@ private final class FakeSpeech: SpeechCapture {
     var holdFinish = false
     var pendingStart: CheckedContinuation<Void, Never>?
     var pendingFinish: CheckedContinuation<String, Never>?
-    func start(onFailure: @escaping () -> Void) async throws {
+    var onSpeech: (() -> Void)?
+    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {
         starts += 1
+        self.onSpeech = onSpeech
         self.onFailure = onFailure
         if let startError { throw startError }
         if holdStart { await withCheckedContinuation { pendingStart = $0 } }
     }
+    var finishes = 0
     func finish() async throws -> String {
+        finishes += 1
         if let finishError { throw finishError }
         if holdFinish { return await withCheckedContinuation { pendingFinish = $0 } }
         return text
@@ -341,8 +572,10 @@ private final class FakeSpeech: SpeechCapture {
 @MainActor
 private final class FakeTimer: CaptureTimer {
     var seconds: TimeInterval?
+    var schedules = 0
     var action: (() -> Void)?
     func schedule(after seconds: TimeInterval, action: @escaping () -> Void) {
+        schedules += 1
         self.seconds = seconds
         self.action = action
     }

@@ -23,20 +23,23 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.bordered)
-            Text(session.state.rawValue.capitalized)
-                .accessibilityLabel("Session state: \(session.state.rawValue)")
-            Button(session.state == .recording ? "Submit recording" : "Start recording") {
-                Task {
-                    if session.state == .recording {
-                        await session.submitCapture()
-                    } else {
-                        await session.startCapture()
-                    }
+            Text(session.statusText)
+                .accessibilityLabel("Session state: \(session.statusText)")
+            if let error = session.errorMessage {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Error: \(error)")
+            }
+            Button(session.isConversationActive ? "End conversation" : "Start conversation") {
+                if session.isConversationActive {
+                    session.endConversation()
+                } else {
+                    Task { await session.startConversation() }
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled((session.state != .ready && session.state != .recording) || session.isFinalizing)
-            Text("Developer-only. Use a trusted network. Apple speech recognition may send audio off-device.")
+            .disabled(!session.isConversationActive && session.state != .ready)
+            Text("Developer-only. Use a trusted network. Speech is recognized on this device.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
