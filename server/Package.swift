@@ -9,6 +9,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/vapor.git", from: "4.110.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.16.2"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.20.0"),
     ],
     targets: [
         .executableTarget(name: "ConvokeServer", dependencies: [
@@ -17,6 +18,7 @@ let package = Package(
             .product(name: "NIOHTTP1", package: "swift-nio"),
             .product(name: "NIOWebSocket", package: "swift-nio"),
             .product(name: "WebSocketKit", package: "websocket-kit"),
+            .product(name: "AsyncHTTPClient", package: "async-http-client"),
         ]),
         .testTarget(name: "ConvokeServerTests", dependencies: [
             "ConvokeServer",

@@ -18,7 +18,7 @@ final class ConnectionLifecycleTests: XCTestCase {
             try channel.connect(to: SocketAddress(ipAddress: "127.0.0.1", port: 8080)).wait()
             let weakConversation = WeakConversation()
             let configured = WebSocket.server(on: channel) { socket in
-                let conversation = Conversation(socket: socket, timeout: .seconds(10), agent: EchoTestAgent()) { _ in Data([0, 0]) }
+                let conversation = Conversation(socket: socket, timeout: .seconds(10), agent: EchoTestAgent(), synthesize: SpeechAudio.stream(wrapping: { _ in Data([0, 0]) }))
                 weakConversation.value = conversation
             }
             channel.embeddedEventLoop.run()
