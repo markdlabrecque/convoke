@@ -8,13 +8,12 @@ final class PCMPlayer: ConversationPlayer {
     private var completion: CheckedContinuation<Void, Error>?
     private var observations: [NSObjectProtocol] = []
     private var playbackID = UUID()
-    /// Chunks scheduled but not yet played back.
-    private var scheduled = 0
+    private var queue = PCMPlaybackQueue()
     private var ended = false
     private var failure: Error?
     private var streaming = false
 
-    /// Starts the engine so the first enqueued chunk plays at once.
+    /// One engine per reply. Playback starts at 200 ms buffered, or at short-reply EOF.
     func beginStream() throws {
         stop()
         let format = try Self.makeBuffer(pcm: Data(count: 2)).format
@@ -46,7 +45,6 @@ final class PCMPlayer: ConversationPlayer {
         #endif
         do {
             try engine.start()
-            node.play()
         } catch {
             stop()
             throw error
@@ -57,12 +55,18 @@ final class PCMPlayer: ConversationPlayer {
     func enqueue(pcm: Data) throws {
         if let failure { throw failure }
         guard streaming, !ended, let node else { throw ResponseError.invalid }
+        // Validate the cap before allocating Float32 storage. Scheduled buffers count
+        // until dataPlayedBack, including those waiting for the startup threshold.
+        var updated = queue
+        try updated.append(bytes: pcm.count)
         let buffer = try Self.makeBuffer(pcm: pcm)
         let id = playbackID
-        scheduled += 1
+        let bytes = pcm.count
+        queue = updated
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            Task { @MainActor in self?.chunkPlayed(id) }
+            Task { @MainActor in self?.chunkPlayed(id, bytes: bytes) }
         }
+        if queue.started, !node.isPlaying { node.play() }
     }
 
     /// Returns after every enqueued chunk has played.
@@ -70,17 +74,19 @@ final class PCMPlayer: ConversationPlayer {
         if let failure { throw failure }
         guard streaming, !ended else { throw ResponseError.invalid }
         ended = true
-        if scheduled == 0 {
+        try queue.finish()
+        if queue.drained {
             finishStream()
             return
         }
+        if queue.started, node?.isPlaying == false { node?.play() }
         try await withCheckedThrowingContinuation { completion = $0 }
     }
 
-    private func chunkPlayed(_ id: UUID) {
-        guard playbackID == id, scheduled > 0 else { return }
-        scheduled -= 1
-        guard ended, scheduled == 0 else { return }
+    private func chunkPlayed(_ id: UUID, bytes: Int) {
+        guard playbackID == id else { return }
+        queue.played(bytes: bytes)
+        guard queue.drained else { return }
         let completed = completion
         completion = nil
         finishStream()
@@ -138,7 +144,7 @@ final class PCMPlayer: ConversationPlayer {
         engine?.stop()
         node = nil
         engine = nil
-        scheduled = 0
+        queue = PCMPlaybackQueue()
         ended = false
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)

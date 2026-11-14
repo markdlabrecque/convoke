@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public enum ResponseError: Error { case invalid }
 
@@ -15,9 +18,10 @@ struct ResponseAccumulator {
     private var hasText = false
     private var chunks = 0
     private var audioBytes = 0
+    private var completed = false
 
     mutating func consume(_ frame: URLSessionWebSocketTask.Message) throws -> ResponseEvent {
-        guard case .string(let text) = frame, text.utf8.count <= 32768 else {
+        guard !completed, case .string(let text) = frame, text.utf8.count <= 32768 else {
             throw ResponseError.invalid
         }
         let message = try JSONDecoder().decode(Message.self, from: Data(text.utf8))
@@ -41,6 +45,7 @@ struct ResponseAccumulator {
         case "agent.done":
             guard hasText, message.keys == ["type", "chunks"],
                   message.chunks == chunks, chunks > 0 else { throw ResponseError.invalid }
+            completed = true
             return .done
         default: throw ResponseError.invalid
         }

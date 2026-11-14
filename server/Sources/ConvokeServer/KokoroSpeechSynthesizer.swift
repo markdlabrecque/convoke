@@ -66,7 +66,7 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         guard response.status == .ok else { throw SpeechError.http(status: response.status.code) }
         // An old image or another server may ignore response_format and send MP3 or WAV.
         let type = response.headers.first(name: .contentType)?.lowercased().split(separator: ";").first.map(String.init) ?? "none"
-        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type \(type) is not raw PCM") }
+        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type is not raw PCM") }
         guard var buffer = response.body else { throw SpeechError.badResponse("empty body") }
         let audio = buffer.readData(length: buffer.readableBytes) ?? Data()
         do { try ConversationProtocol.validateAudio(audio) }
@@ -74,9 +74,10 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         return audio
     }
 
-    /// Asks Kokoro to stream and hands the PCM on as it arrives. The consumer pulls: nothing is
-    /// read from the sidecar ahead of what the caller has taken. Cancelling the consuming task
-    /// cancels the request. Non-200 and non-PCM responses fail before any audio is returned.
+    /// Pull-based HTTP body reads preserve AHC's bounded transport read-ahead. Its body uses
+    /// NIO's high/low watermark producer, not an unbounded application queue. Dropping the
+    /// iterator on consumer failure cancels the transaction; cancellation during next() also
+    /// cancels it. Non-200 and non-PCM responses fail before any audio is returned.
     @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error> {
         var request = HTTPClientRequest(url: config.baseURL + "/v1/audio/speech")
         request.method = .POST
@@ -85,19 +86,34 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         let response = try await http.execute(request, timeout: .seconds(120))
         guard response.status == .ok else { throw SpeechError.http(status: response.status.code) }
         let type = response.headers.first(name: "content-type")?.lowercased().split(separator: ";").first.map(String.init) ?? "none"
-        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type \(type) is not raw PCM") }
+        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type is not raw PCM") }
         let body = BodyPuller(response.body)
         return AsyncThrowingStream<Data, Error>(unfolding: { try await body.next() })
     }
 }
 
 /// Pulls one body part at a time. Used by one consumer, which awaits each pull.
-private final class BodyPuller<Body: AsyncSequence>: @unchecked Sendable where Body.Element == ByteBuffer {
+final class BodyPuller<Body: AsyncSequence>: @unchecked Sendable where Body.Element == ByteBuffer {
     private var iterator: Body.AsyncIterator
+    private var trailing: UInt8?
+    private var emitted = false
     init(_ body: Body) { iterator = body.makeAsyncIterator() }
 
     func next() async throws -> Data? {
-        guard var buffer = try await iterator.next() else { return nil }
-        return buffer.readData(length: buffer.readableBytes) ?? Data()
+        while true {
+            try Task.checkCancellation()
+            guard var buffer = try await iterator.next() else {
+                guard trailing == nil, emitted else { throw SpeechError.badResponse("empty or incomplete PCM") }
+                return nil
+            }
+            guard buffer.readableBytes > 0 else { continue }
+            var data = Data()
+            if let trailing { data.append(trailing); self.trailing = nil }
+            data.append(buffer.readData(length: buffer.readableBytes) ?? Data())
+            if !data.count.isMultiple(of: 2) { trailing = data.removeLast() }
+            guard !data.isEmpty else { continue }
+            emitted = true
+            return data
+        }
     }
 }

@@ -48,6 +48,10 @@ struct AudioFramer {
     private(set) var totalBytes = 0
 
     mutating func push(_ piece: Data) throws -> [Data] {
+        // Count the pending half-sample too, and reject before copying source storage.
+        guard piece.count <= ConversationProtocol.maxAudioBytes - totalBytes - carry.count else {
+            throw ConversationError.audioLimit
+        }
         var data = carry + piece
         carry = Data()
         if !data.count.isMultiple(of: 2) {
@@ -82,7 +86,10 @@ final class Conversation: @unchecked Sendable {
     private enum State { case idle, active, closed }
     private var state = State.idle
     private let socket: WebSocket
-    private let synthesize: SynthesizeStream
+    /// Optional write boundary for deterministic slow/failing transport tests.
+    private let sendFrame: ((String) -> EventLoopFuture<Void>)?
+    typealias ConsumePCM = @MainActor (String, @escaping PCMConsumer) async throws -> Void
+    private let synthesize: ConsumePCM
     private let agent: any Agent
     private let logger: Logger
     private let timeout: TimeAmount
@@ -104,13 +111,21 @@ final class Conversation: @unchecked Sendable {
     init(
         socket: WebSocket, timeout: TimeAmount, agent: any Agent,
         logger: Logger = Logger(label: "convoke.conversation"),
-        synthesize: @escaping SynthesizeStream
+        synthesize: @escaping SynthesizeStream,
+        consume: ConsumePCM? = nil,
+        sendFrame: ((String) -> EventLoopFuture<Void>)? = nil
     ) {
         self.socket = socket
+        self.sendFrame = sendFrame
         self.logger = logger
         self.timeout = timeout
         self.agent = agent
-        self.synthesize = synthesize
+        self.synthesize = consume ?? { text, consumer in
+            for try await piece in try await synthesize(text) {
+                try Task.checkCancellation()
+                try await consumer(piece)
+            }
+        }
         socket.onText { [weak self] _, text in self?.receive(text) }
         socket.onBinary { [weak self] _, _ in self?.close() }
         // Retain the conversation until the channel closes, not through the
@@ -179,14 +194,11 @@ final class Conversation: @unchecked Sendable {
     private func startSynthesis(_ reply: String) {
         synthesis = Task { @MainActor [synthesize] in
             do {
-                let pieces = try await synthesize(reply)
                 var framer = AudioFramer()
                 var sequence = 0
-                var iterator = pieces.makeAsyncIterator()
-                // Each frame goes out as soon as its audio exists, so the phone can start
-                // playing before synthesis ends. The next piece is not pulled until the
-                // previous frame has been written.
-                while let piece = try await iterator.next() {
+                // A single async consumer awaits every socket write before the producer
+                // reads again. No per-chunk tasks or unbounded hand-off queue.
+                try await synthesize(reply) { piece in
                     try Task.checkCancellation()
                     for chunk in try framer.push(piece) {
                         let frame = try ConversationProtocol.json([
@@ -204,7 +216,8 @@ final class Conversation: @unchecked Sendable {
                 let cancelled = error is CancellationError || Task.isCancelled
                 let writeFailed = error is WriteFailed
                 if !cancelled && !writeFailed {
-                    self.logger.error("Speech synthesis failed", metadata: ["reason": "\(error)"])
+                    let reason = (error as? SpeechError)?.description ?? "\(type(of: error))"
+                    self.logger.error("Speech synthesis failed", metadata: ["reason": "\(reason)"])
                 }
                 self.socket.eventLoop.execute {
                     // Already closed by a disconnect, timeout or overlapping turn: nothing to add.
@@ -221,12 +234,12 @@ final class Conversation: @unchecked Sendable {
     private func write(_ frame: String, completesTurn: Bool = false) async throws {
         let loop = socket.eventLoop
         do {
-            try await loop.flatSubmit { () -> EventLoopFuture<Void> in
+            try await CancellableWrite.run(on: loop) {
                 guard self.state == .active else { return loop.makeFailedFuture(CancellationError()) }
                 return self.send(frame).map {
                     if completesTurn, self.state == .active { self.finishTurn() }
                 }
-            }.get()
+            }
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -242,6 +255,7 @@ final class Conversation: @unchecked Sendable {
     }
 
     private func send(_ frame: String) -> EventLoopFuture<Void> {
+        if let sendFrame { return sendFrame(frame) }
         let promise = socket.eventLoop.makePromise(of: Void.self)
         socket.send(frame, promise: promise)
         return promise.futureResult
@@ -290,10 +304,23 @@ func configure(
     } else {
         app.http.server.configuration.port = 8080
     }
+    let consumeAudio: Conversation.ConsumePCM?
+    if stream == nil && synthesize == nil {
+        consumeAudio = { text, consumer in
+            let synthesizer = makeSpeechSynthesizer(kokoro: kokoro, client: client, http: http)
+            try await synthesizer.consume(text, consumer: consumer)
+        }
+    } else {
+        consumeAudio = nil
+    }
     app.get("conversation") { _ -> Response in
         let response = Response(status: .switchingProtocols)
         response.upgrader = ConversationUpgrader { socket in
-            _ = Conversation(socket: socket, timeout: turnTimeout, agent: agent, logger: app.logger, synthesize: streamAudio)
+            _ = Conversation(
+                socket: socket, timeout: turnTimeout, agent: agent, logger: app.logger,
+                synthesize: streamAudio,
+                consume: consumeAudio
+            )
         }
         return response
     }

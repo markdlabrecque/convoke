@@ -12,7 +12,16 @@ protocol SpeechSynthesizer {
     @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error>
 }
 
+typealias PCMConsumer = @MainActor (Data) async throws -> Void
+
 extension SpeechSynthesizer {
+    @MainActor func consume(_ text: String, consumer: @escaping PCMConsumer) async throws {
+        for try await piece in try await stream(text) {
+            try Task.checkCancellation()
+            try await consumer(piece)
+        }
+    }
+
     @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error> {
         try SpeechAudio.wholeReply(try await synthesize(text))
     }
