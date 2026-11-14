@@ -65,6 +65,49 @@ final class ResponseDecodingTests: XCTestCase {
         }
     }
 
+    func testStrictAudioKeysTypesAndPostDoneFrames() throws {
+        for object: [String: Any] in [
+            ["type": "agent.audio", "sequence": 0, "data": "AAA=", "extra": false],
+            ["type": "agent.audio", "sequence": 0],
+            ["type": "agent.audio", "data": "AAA="],
+            ["type": "agent.audio", "sequence": "0", "data": "AAA="],
+            ["type": "agent.audio", "sequence": 0, "data": 7],
+            ["type": "agent.done", "chunks": "1"],
+            ["type": "agent.done", "chunks": 0.5],
+            ["type": "agent.done", "chunks": NSNull()]
+        ] {
+            var response = ResponseAccumulator()
+            _ = try response.consume(text())
+            if object["type"] as? String == "agent.done" { _ = try response.consume(audio()) }
+            XCTAssertThrowsError(try response.consume(frame(object)))
+        }
+        for message in [try text(), try audio(sequence: 1), try done(1)] {
+            var response = ResponseAccumulator()
+            _ = try response.consume(text())
+            _ = try response.consume(audio())
+            _ = try response.consume(done(1))
+            XCTAssertThrowsError(try response.consume(message), "Every frame after EOF is invalid")
+        }
+    }
+
+    func testIncrementalEventsRetainOnlyScalarStateAtExactJSONBoundary() throws {
+        var response = ResponseAccumulator()
+        let textFrame = #"{"type":"agent.text","text":"x"}"#
+        _ = try response.consume(.string(textFrame + String(repeating: " ", count: 32_768 - textFrame.utf8.count)))
+        for sequence in 0..<3 {
+            XCTAssertEqual(try response.consume(audio(16_384, sequence: sequence)),
+                           .audio(Data(repeating: 128, count: 16_384)))
+            // A structural regression guard: the validator must not add an audio
+            // buffer or event collection after handing this chunk to the player.
+            for field in Mirror(reflecting: response).children {
+                XCTAssertTrue(field.value is Bool || field.value is Int, "Response stores counters/flags only")
+            }
+        }
+        XCTAssertEqual(try response.consume(done(3)), .done)
+        var overflow = ResponseAccumulator()
+        XCTAssertThrowsError(try overflow.consume(.string(textFrame + String(repeating: " ", count: 32_769 - textFrame.utf8.count))))
+    }
+
     func testExactChunkAndBufferLimitsAndOverflow() throws {
         var response = ResponseAccumulator()
         _ = try response.consume(text())
@@ -341,6 +384,56 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(player.buffers.count, 1)
     }
 
+    func testIndependentlyGatedEOFAndPlaybackAcrossSequentialHandsFreeTurns() async {
+        for eofFirst in [false, true] {
+            await setup()
+            await session.startConversation()
+            for turn in 1...3 {
+                await session.submitCapture()
+                let buffered = expectation(description: "audio delivered before EOF")
+                let reading = expectation(description: "receiver waiting while playback is held")
+                player.onEnqueue = { [self] in
+                    player.onEnqueue = nil
+                    buffered.fulfill()
+                    transport.onWaiting = { [self] in
+                        transport.onWaiting = nil
+                        reading.fulfill()
+                    }
+                }
+                transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
+                transport.push(audioFrame(0))
+                await fulfillment(of: [buffered, reading], timeout: 2)
+                XCTAssertEqual(session.state, .playing)
+                XCTAssertEqual(speech.starts, turn)
+                XCTAssertEqual(player.begins, turn)
+                let resumed = expectation(description: "listen exactly once after both gates")
+                speech.onStart = { resumed.fulfill() }
+                if !eofFirst {
+                    player.finish() // Queue runs dry, but the source EOF gate is closed.
+                    XCTAssertEqual(session.state, .playing)
+                    XCTAssertEqual(speech.starts, turn)
+                }
+                let ending = expectation(description: "validated source EOF")
+                player.onEnd = { ending.fulfill() }
+                transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+                await fulfillment(of: [ending], timeout: 2)
+                if eofFirst {
+                    XCTAssertEqual(speech.starts, turn, "Network completion cannot start the microphone")
+                    XCTAssertEqual(session.state, .playing)
+                    player.finish()
+                }
+                await fulfillment(of: [resumed], timeout: 2)
+                speech.onStart = nil
+                player.onEnd = nil
+                XCTAssertEqual(session.state, .recording)
+                XCTAssertEqual(speech.starts, turn + 1)
+                XCTAssertEqual(player.ends, turn)
+            }
+            XCTAssertEqual(transport.sent.count, 3)
+            session.disconnect()
+        }
+    }
+
     func testInitiallyBufferedAudioIsNotPlayingAndEndDisconnects() async {
         await setup()
         player.holdStart = true
@@ -540,12 +633,16 @@ private final class ResponseTransport: ConversationTransport {
     var connects = 0
     var disconnects = 0
     var onReceive: (() -> Void)?
+    var onWaiting: (() -> Void)?
     func connect(to url: URL) async throws { connects += 1 }
     func send(text: String) async throws { sent.append(text) }
     func receive() async throws -> URLSessionWebSocketTask.Message {
         onReceive?()
         if !queue.isEmpty { return queue.removeFirst() }
-        return try await withCheckedThrowingContinuation { pending = $0 }
+        return try await withCheckedThrowingContinuation {
+            pending = $0
+            onWaiting?()
+        }
     }
     func push(_ message: URLSessionWebSocketTask.Message) {
         if let pending {
@@ -575,6 +672,8 @@ private final class ResponsePlayer: ConversationPlayer {
     var drained = false
     var onStarted: (() -> Void)?
     var onFailure: (() -> Void)?
+    var onEnqueue: (() -> Void)?
+    var onEnd: (() -> Void)?
     func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {
         begins += 1
         drained = false
@@ -586,10 +685,12 @@ private final class ResponsePlayer: ConversationPlayer {
         if fail { throw ResponseError.invalid }
         drained = false
         if !holdStart { onStarted?() }
+        onEnqueue?()
     }
     func endStream() async throws {
         ends += 1
         onStarted?()
+        onEnd?()
         if drained { return }
         try await withCheckedThrowingContinuation { pending = $0 }
     }
@@ -610,7 +711,11 @@ private final class ResponsePlayer: ConversationPlayer {
 @MainActor
 private final class ResponseSpeech: SpeechCapture {
     var starts = 0
-    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws { starts += 1 }
+    var onStart: (() -> Void)?
+    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {
+        starts += 1
+        onStart?()
+    }
     func finish() async throws -> String { "hello" }
     func cancel() {}
 }

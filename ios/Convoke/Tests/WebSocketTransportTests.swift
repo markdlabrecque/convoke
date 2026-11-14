@@ -73,6 +73,56 @@ final class WebSocketTransportTests: XCTestCase {
         await fulfillment(of: [disconnected], timeout: 3)
     }
 
+    func testUnreadByteCapDisconnectsBelowFrameCountCap() async throws {
+        let server = LocalWebSocketServer(mode: .byteFlood)
+        let url = try await server.start()
+        defer { server.stop() }
+        let transport = WebSocketTransport()
+        defer { transport.disconnect() }
+        let disconnected = expectation(description: "Unread byte cap is bounded independently of frame count")
+        transport.onDisconnect = { disconnected.fulfill() }
+        try await transport.connect(to: url)
+        // 513 valid-size frames exceed 16 MiB, but not the 1024-frame cap.
+        // Holding the consumer models slow playback without a wall-clock sleep.
+        await fulfillment(of: [disconnected], timeout: 10)
+        do { _ = try await transport.receive(); XCTFail("Overflow must discard queued frames") } catch {}
+    }
+
+    func testReceiveAndHeartbeatContinueWhilePlaybackCompletionIsGated() async throws {
+        let ping = expectation(description: "Peer receives heartbeat while audio is held")
+        let server = LocalWebSocketServer(mode: .reply)
+        let url = try await server.start()
+        defer { server.stop() }
+        let transport = WebSocketTransport(heartbeatInterval: 50_000_000, heartbeatTimeout: 2_000_000_000)
+        let player = GatedTransportPlayer()
+        let eof = expectation(description: "Done received before playback completion")
+        player.onEOF = { eof.fulfill() }
+        let speech = TransportTestSpeech()
+        let name = "ConvokeTransportTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let controller = SessionController(defaults: defaults, transport: transport, recognition: speech,
+            timer: TransportTestTimer(), silenceTimer: TransportTestTimer(), player: player)
+        defer { controller.disconnect() }
+        controller.serverURL = url.absoluteString
+        await controller.connect()
+        await controller.startConversation()
+        await controller.submitCapture()
+        await fulfillment(of: [eof], timeout: 5)
+        server.observeNextPing { ping.fulfill() }
+        await fulfillment(of: [ping], timeout: 5)
+        XCTAssertEqual(controller.state, .playing)
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertEqual(player.buffers, [Data([1, 2]), Data([3, 4])])
+        XCTAssertNotNil(player.pending)
+        let resumed = expectation(description: "Microphone resumes after actual playback")
+        speech.onStart = { resumed.fulfill() }
+        player.complete()
+        await fulfillment(of: [resumed], timeout: 3)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertEqual(controller.state, .recording)
+    }
+
     func testMissingPongTimesOutWithoutReceive() async throws {
         let server = LocalWebSocketServer(mode: .silent)
         let url = try await server.start()
@@ -119,17 +169,22 @@ final class WebSocketTransportTests: XCTestCase {
     }
 }
 
-// A loopback-only WebSocket peer. It exchanges control frames, not conversation
-// messages, and needs no external process, dependency, or development server.
+// A loopback-only WebSocket peer for control frames and fixed synthetic replies.
+// No external process, model, audio hardware or development server is needed.
 private final class LocalWebSocketServer: @unchecked Sendable {
-    enum Mode { case close, silent, pong, message, flood }
+    enum Mode { case close, silent, pong, message, flood, byteFlood, reply }
     private let mode: Mode
     private let queue = DispatchQueue(label: "ConvokeTests.websocket")
     private var listener: NWListener?
     private var startResolved = false
     private var connections: [NWConnection] = []
 
+    private var onPing: (() -> Void)?
     init(mode: Mode) { self.mode = mode }
+
+    func observeNextPing(_ callback: @escaping () -> Void) {
+        queue.async { self.onPing = callback }
+    }
 
     func start() async throws -> URL {
         let parameters = NWParameters.tcp
@@ -197,6 +252,11 @@ private final class LocalWebSocketServer: @unchecked Sendable {
                 } else if self.mode == .flood {
                     let frames = Data(Array(repeating: [UInt8(0x81), 0], count: 1025).flatMap { $0 })
                     connection.send(content: frames, completion: .contentProcessed { _ in })
+                } else if self.mode == .byteFlood {
+                    var frames = Data()
+                    let frame = Data([0x81, 126, 128, 0]) + Data(repeating: 120, count: 32_768)
+                    for _ in 0..<513 { frames.append(frame) }
+                    connection.send(content: frames, completion: .contentProcessed { _ in })
                 }
                 self.controlFrames(connection, buffered: Data())
             }
@@ -212,7 +272,22 @@ private final class LocalWebSocketServer: @unchecked Sendable {
                 let masked = bytes[1] & 0x80 != 0
                 let header = masked ? 6 : 2
                 guard length <= 125, bytes.count >= header + length else { break }
+                if bytes[0] & 0x0f == 1, self.mode == .reply {
+                    let messages = [
+                        #"{"type":"agent.text","text":"x"}"#,
+                        #"{"type":"agent.audio","sequence":0,"data":"AQI="}"#,
+                        #"{"type":"agent.audio","sequence":1,"data":"AwQ="}"#,
+                        #"{"type":"agent.done","chunks":2}"#
+                    ]
+                    for message in messages {
+                        let payload = Array(message.utf8)
+                        connection.send(content: Data([0x81, UInt8(payload.count)] + payload), completion: .contentProcessed { _ in })
+                    }
+                }
                 if bytes[0] & 0x0f == 9, self.mode != .silent {
+                    let callback = self.onPing
+                    self.onPing = nil
+                    callback?()
                     var payload = Array(bytes[header..<(header + length)])
                     if masked {
                         for index in payload.indices { payload[index] ^= bytes[2 + index % 4] }
@@ -230,7 +305,12 @@ private final class LocalWebSocketServer: @unchecked Sendable {
 private final class TransportTestSpeech: SpeechCapture {
     var cancels = 0
     var finishes = 0
-    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {}
+    var starts = 0
+    var onStart: (() -> Void)?
+    func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {
+        starts += 1
+        onStart?()
+    }
     func finish() async throws -> String { finishes += 1; return "must not send" }
     func cancel() { cancels += 1 }
 }
@@ -248,5 +328,37 @@ private final class TransportTestPlayer: ConversationPlayer {
     func enqueue(pcm: Data) throws {}
     func endStream() async throws {}
     func stop() {}
+}
+
+@MainActor
+private final class GatedTransportPlayer: ConversationPlayer {
+    var buffers: [Data] = []
+    var pending: CheckedContinuation<Void, Error>?
+    var onEOF: (() -> Void)?
+    private var onStarted: (() -> Void)?
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {
+        self.onStarted = onStarted
+    }
+    func enqueue(pcm: Data) throws {
+        buffers.append(pcm)
+        onStarted?()
+        onStarted = nil
+    }
+    func endStream() async throws {
+        try await withCheckedThrowingContinuation {
+            pending = $0
+            onEOF?()
+        }
+    }
+    func complete() {
+        let continuation = pending
+        pending = nil
+        continuation?.resume()
+    }
+    func stop() {
+        let continuation = pending
+        pending = nil
+        continuation?.resume(throwing: CancellationError())
+    }
 }
 #endif

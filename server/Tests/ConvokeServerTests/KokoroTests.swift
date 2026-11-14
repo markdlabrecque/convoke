@@ -1,5 +1,8 @@
 import XCTest
 import NIOCore
+import NIOHTTP1
+import NIOPosix
+import AsyncHTTPClient
 import Vapor
 @testable import ConvokeServer
 
@@ -62,7 +65,10 @@ final class KokoroTests: XCTestCase {
     }
 
     @MainActor func testStreamErrorsAreThrownBeforeAnyAudio() async throws {
-        let cases: [(HTTPStatus, String)] = [(.internalServerError, "audio/pcm"), (.ok, "audio/mpeg"), (.ok, "audio/wav")]
+        let cases: [(HTTPStatus, String)] = [
+            (.internalServerError, "audio/pcm"), (.noContent, "audio/pcm"),
+            (.ok, "audio/mpeg"), (.ok, "audio/wav"), (.ok, "application/octet-stream"), (.ok, "")
+        ]
         for (status, type) in cases {
             do {
                 _ = try await withStub(Stub(), status: status, body: Data([0, 0]), type: type) { _ = try await $0.stream("x") }
@@ -98,6 +104,72 @@ final class KokoroTests: XCTestCase {
         XCTAssertNil(eof)
     }
 
+    /// Each write is released by the test, not by a timer or a prebuffered body.
+    @MainActor func testHTTPHeadersPiecesAndEOFAreIndependent() async throws {
+        for type in ["audio/pcm", "audio/l16", "audio/x-pcm", "audio/pcm; rate=24000"] {
+            try await withGatedHTTP { synthesizer, peer in
+                let delivered = self.expectation(description: "PCM before EOF")
+                let headers = self.expectation(description: "headers received")
+                var received = Data()
+                var finished = false
+                let task = Task { @MainActor in
+                    let stream = try await synthesizer.stream("fixture")
+                    headers.fulfill()
+                    for try await piece in stream {
+                        XCTAssertFalse(peer.ended)
+                        XCTAssertTrue(piece.count.isMultiple(of: 2))
+                        received.append(piece)
+                        delivered.fulfill()
+                    }
+                    finished = true
+                }
+                defer { task.cancel() }
+                await self.fulfillment(of: [peer.requested], timeout: 3)
+                XCTAssertFalse(finished)
+                XCTAssertTrue(received.isEmpty)
+                try await peer.send(.head(HTTPResponseHead(version: .http1_1, status: .ok,
+                    headers: ["content-type": type, "transfer-encoding": "chunked"])))
+                await self.fulfillment(of: [headers], timeout: 3)
+                XCTAssertTrue(received.isEmpty, "Headers alone must not produce PCM")
+                try await peer.send(.body(.byteBuffer(ByteBuffer(bytes: [1]))))
+                try await peer.send(.body(.byteBuffer(ByteBuffer(bytes: [2, 3, 4]))))
+                await self.fulfillment(of: [delivered], timeout: 3)
+                XCTAssertEqual(received, Data([1, 2, 3, 4]))
+                XCTAssertFalse(finished, "Consumer delivery must precede source EOF release")
+                try await peer.end()
+                try await task.value
+                XCTAssertTrue(finished)
+            }
+        }
+    }
+
+    @MainActor private func withGatedHTTP(
+        run: (KokoroSpeechSynthesizer, GatedHTTPPeer) async throws -> Void
+    ) async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let peer = GatedHTTPPeer(requested: expectation(description: "request received"))
+        let server = try await ServerBootstrap(group: group).childChannelInitializer { channel in
+            channel.pipeline.configureHTTPServerPipeline().flatMap { channel.pipeline.addHandler(peer) }
+        }.bind(host: "127.0.0.1", port: 0).get()
+        let http = HTTPClient(eventLoopGroupProvider: .shared(group))
+        let app = try await Application.make(.testing)
+        do {
+            let port = try XCTUnwrap(server.localAddress?.port)
+            let config = try XCTUnwrap(KokoroConfig(environment: ["CONVOKE_KOKORO_URL": "http://127.0.0.1:\(port)"]))
+            try await run(KokoroSpeechSynthesizer(client: app.client, config: config, http: http), peer)
+        } catch {
+            try? await http.shutdown()
+            try? await server.close().get()
+            try? await app.asyncShutdown()
+            try? await group.shutdownGracefully()
+            throw error
+        }
+        try await http.shutdown()
+        try await server.close().get()
+        try await app.asyncShutdown()
+        try await group.shutdownGracefully()
+    }
+
     private struct TestBody: AsyncSequence {
         typealias Element = ByteBuffer
         let parts: [ByteBuffer]
@@ -107,6 +179,32 @@ final class KokoroTests: XCTestCase {
             mutating func next() async throws -> ByteBuffer? { iterator.next() }
         }
         func makeAsyncIterator() -> AsyncIterator { AsyncIterator(iterator: parts.makeIterator()) }
+    }
+
+    /// The peer exposes protocol writes so HTTP read-ahead cannot turn this into
+    /// a test of a fully buffered response. No content is logged or saved.
+    private final class GatedHTTPPeer: ChannelInboundHandler, @unchecked Sendable {
+        typealias InboundIn = HTTPServerRequestPart
+        let requested: XCTestExpectation
+        private let lock = NSLock()
+        private var channel: Channel?
+        private var eof = false
+        var ended: Bool { lock.withLock { eof } }
+        init(requested: XCTestExpectation) { self.requested = requested }
+        func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+            if case .end = unwrapInboundIn(data) {
+                lock.withLock { channel = context.channel }
+                requested.fulfill()
+            }
+        }
+        func send(_ part: HTTPServerResponsePart) async throws {
+            let channel = try XCTUnwrap(lock.withLock { self.channel })
+            try await channel.writeAndFlush(part).get()
+        }
+        func end() async throws {
+            lock.withLock { eof = true }
+            try await send(.end(nil))
+        }
     }
 
     final class Stub: @unchecked Sendable { var path = "", body = "" }

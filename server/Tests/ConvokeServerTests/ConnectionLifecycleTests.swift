@@ -4,6 +4,9 @@ import Darwin
 import Glibc
 #endif
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Vapor
 import NIOCore
 import NIOEmbedded
@@ -31,6 +34,78 @@ final class ConnectionLifecycleTests: XCTestCase {
             channel.embeddedEventLoop.run()
             XCTAssertNil(weakConversation.value, "Closed connections must release the conversation")
             _ = try channel.finish(acceptAlreadyClosed: true)
+        }
+    }
+
+    func testSuspendedSocketConsumerCleansUpOnDisconnectDeadlineAndFailure() async throws {
+        enum Stop: CaseIterable { case disconnect, deadline, failedWrite }
+        struct FailedWrite: Error {}
+        for stop in Stop.allCases {
+            let app = try await Application.make(.testing)
+            let cleanup = expectation(description: "suspended producer exits")
+            let (attempts, feed) = AsyncStream<EventLoopPromise<Void>>.makeStream()
+            var writes = attempts.makeAsyncIterator()
+            app.get("conversation") { _ -> Response in
+                let response = Response(status: .switchingProtocols)
+                response.upgrader = ConversationUpgrader { socket in
+                    _ = Conversation(socket: socket, timeout: stop == .deadline ? .seconds(1) : .seconds(10),
+                        agent: EchoTestAgent(), synthesize: { _ in fatalError("consumer expected") },
+                        consume: { _, consume in
+                            defer { cleanup.fulfill() }
+                            try await consume(Data([1, 2]))
+                            XCTFail("Cancelled/failed consumer must not pull the next source piece")
+                            try await consume(Data([3, 4]))
+                        }, sendFrame: { frame in
+                            if frame.contains("agent.text") {
+                                let sent = socket.eventLoop.makePromise(of: Void.self)
+                                socket.send(frame, promise: sent)
+                                return sent.futureResult
+                            }
+                            XCTAssertTrue(frame.contains("agent.audio"), "No successful done after failure")
+                            let gate = socket.eventLoop.makePromise(of: Void.self)
+                            feed.yield(gate)
+                            return gate.futureResult
+                        })
+                }
+                return response
+            }
+            do {
+                try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+                let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
+                let session = URLSession(configuration: .ephemeral)
+                defer { session.invalidateAndCancel(); feed.finish() }
+                let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+                socket.resume()
+                let watchdog = Task {
+                    try await Task.sleep(nanoseconds: 15_000_000_000)
+                    socket.cancel(with: .goingAway, reason: nil)
+                    feed.finish()
+                }
+                defer { watchdog.cancel() }
+                try await socket.send(.string("{\"type\":\"user.text\",\"text\":\"fixture\"}"))
+                _ = try await socket.receive()
+                let attempt = await writes.next()
+                let gate = try XCTUnwrap(attempt)
+                switch stop {
+                case .disconnect: socket.cancel(with: .goingAway, reason: nil)
+                case .deadline: break // Let the real deadline cancel the stalled consumer.
+                case .failedWrite: gate.fail(FailedWrite())
+                }
+                await fulfillment(of: [cleanup], timeout: 3)
+                if stop != .failedWrite {
+                    // A late successful socket completion cannot resurrect the producer.
+                    gate.succeed(())
+                }
+                if stop != .disconnect {
+                    do { _ = try await socket.receive(); XCTFail("Partial turn cannot complete") } catch {}
+                }
+            } catch {
+                await app.server.shutdown()
+                try? await app.asyncShutdown()
+                throw error
+            }
+            await app.server.shutdown()
+            try await app.asyncShutdown()
         }
     }
 
