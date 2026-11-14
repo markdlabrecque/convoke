@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import ConvokeCore
 
 final class ResponseDecodingTests: XCTestCase {
@@ -309,6 +312,7 @@ final class ResponseLifecycleTests: XCTestCase {
         while player.pending == nil { await Task.yield() }
         session.endConversation()
         XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(transport.disconnects, 0)
         XCTAssertGreaterThan(player.stops, 0)
         for _ in 0..<5 { await Task.yield() }
         XCTAssertEqual(speech.starts, 1)
@@ -325,6 +329,194 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertFalse(session.isConversationActive)
         XCTAssertEqual(speech.starts, 1)
+    }
+
+    private func beginReply() async {
+        await session.startConversation()
+        await session.submitCapture()
+        transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
+        transport.push(audioFrame(0))
+        let deadline = Date().addingTimeInterval(2)
+        while player.buffers.isEmpty && Date() < deadline { await Task.yield() }
+        XCTAssertEqual(player.buffers.count, 1)
+    }
+
+    func testInitiallyBufferedAudioIsNotPlayingAndEndDisconnects() async {
+        await setup()
+        player.holdStart = true
+        await beginReply()
+        XCTAssertEqual(session.state, .waiting)
+        XCTAssertEqual(speech.starts, 1)
+        session.endConversation()
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertFalse(session.isConversationActive)
+    }
+
+    func testShortReplyStartsAtEOFAndWaitsForActualDrain() async {
+        await setup()
+        player.holdStart = true
+        await beginReply()
+        XCTAssertEqual(session.state, .waiting)
+        transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+        await waitFor(.playing)
+        XCTAssertEqual(speech.starts, 1)
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 2)
+        session.disconnect()
+    }
+
+    func testDrainBeforeEOFIsUnderrunAndResumesExactlyOnceAtEOF() async {
+        await setup()
+        await beginReply()
+        player.finish()
+        // A read barrier proves the receiver is waiting for EOF while the queue is empty.
+        while transport.pending == nil { await Task.yield() }
+        XCTAssertEqual(session.state, .playing)
+        XCTAssertEqual(speech.starts, 1)
+        transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertEqual(player.ends, 1)
+        session.disconnect()
+    }
+
+    func testUnderrunAcceptsMoreAudioWithoutStartingCaptureOrAnotherPlayer() async {
+        await setup()
+        await beginReply()
+        player.finish()
+        transport.push(audioFrame(1))
+        while player.buffers.count < 2 { await Task.yield() }
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertEqual(player.begins, 1)
+        transport.push(.string(#"{"type":"agent.done","chunks":2}"#))
+        while player.pending == nil { await Task.yield() }
+        XCTAssertEqual(speech.starts, 1)
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 2)
+        session.disconnect()
+    }
+
+    func testInterruptionBeforeEOFDisconnectsImmediatelyWithoutNextFrame() async {
+        await setup()
+        await beginReply()
+        let failed = player.onFailure
+        failed?()
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.errorMessage, "Audio playback failed.")
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertGreaterThan(player.stops, 0)
+        XCTAssertEqual(speech.starts, 1)
+        failed?()
+        XCTAssertEqual(logs, ["Audio playback failed"], "Failure is scoped to the invalidated reply")
+    }
+
+    func testLateCallbacksAfterEndCannotCorruptNewReplyOnSameConnection() async {
+        await setup()
+        await beginReply()
+        transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+        while player.pending == nil { await Task.yield() }
+        let oldStarted = player.onStarted
+        let oldFailure = player.onFailure
+        let oldCompletion = player.pending
+        player.pending = nil // Deliberately retain a callback that ignores cancellation.
+        session.endConversation()
+        XCTAssertEqual(session.state, .ready)
+        await session.startConversation()
+        await session.submitCapture()
+        oldStarted?()
+        oldFailure?()
+        oldCompletion?.resume()
+        while transport.pending == nil { await Task.yield() }
+        XCTAssertEqual(session.state, .waiting)
+        XCTAssertNil(session.errorMessage)
+        XCTAssertEqual(speech.starts, 2)
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 3)
+        session.disconnect()
+    }
+
+    func testEndAfterValidatedEOFBeforeFinalizerRunsDoesNotCallStoppedPlayer() async {
+        await setup()
+        await beginReply()
+        let ended = expectation(description: "End before queued EOF finalizer")
+        transport.onReceive = { [self] in
+            transport.onReceive = nil
+            session.endConversation()
+            ended.fulfill()
+        }
+        transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+        await fulfillment(of: [ended], timeout: 2)
+        XCTAssertEqual(session.state, .ready)
+        await session.startConversation()
+        await session.submitCapture()
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        XCTAssertEqual(player.ends, 1, "Only the new reply may call endStream")
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 3)
+        session.disconnect()
+    }
+
+    func testInterruptionAfterEOFStopsPendingPlaybackAndCannotRestartCapture() async {
+        await setup()
+        await beginReply()
+        transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
+        while player.pending == nil { await Task.yield() }
+        player.onFailure?()
+        await waitFor(.disconnected)
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(session.errorMessage, "Audio playback failed.")
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertNil(player.pending)
+    }
+
+    func testOldReceiveCannotStartAudioOnReconnectedConversation() async {
+        await setup()
+        await beginReply()
+        while transport.pending == nil { await Task.yield() }
+        let oldRead = transport.pending
+        transport.pending = nil
+        session.disconnect()
+        await session.connect()
+        await session.startConversation()
+        await session.submitCapture()
+        oldRead?.resume(returning: audioFrame(1))
+        while transport.pending == nil { await Task.yield() }
+        XCTAssertEqual(session.state, .waiting)
+        XCTAssertEqual(player.begins, 1)
+        response()
+        await waitFor(.playing)
+        while player.pending == nil { await Task.yield() }
+        XCTAssertEqual(player.begins, 2)
+        session.disconnect()
+    }
+
+    func testBackgroundDisconnectInvalidatesPlayerAndConnectionCallbacks() async {
+        await setup()
+        await beginReply()
+        let oldStarted = player.onStarted
+        let oldFailure = player.onFailure
+        let oldDisconnect = transport.onDisconnect
+        session.disconnect() // ContentView's background action.
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertGreaterThan(player.stops, 0)
+        await session.connect()
+        await session.startConversation()
+        oldStarted?()
+        oldFailure?()
+        oldDisconnect?()
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertNil(session.errorMessage)
+        session.disconnect()
     }
 
     func testReceiveFailureDisconnectsWithoutAutomaticReconnect() async {
@@ -346,9 +538,12 @@ private final class ResponseTransport: ConversationTransport {
     var queue: [URLSessionWebSocketTask.Message] = []
     var sent: [String] = []
     var connects = 0
+    var disconnects = 0
+    var onReceive: (() -> Void)?
     func connect(to url: URL) async throws { connects += 1 }
     func send(text: String) async throws { sent.append(text) }
     func receive() async throws -> URLSessionWebSocketTask.Message {
+        onReceive?()
         if !queue.isEmpty { return queue.removeFirst() }
         return try await withCheckedThrowingContinuation { pending = $0 }
     }
@@ -359,6 +554,7 @@ private final class ResponseTransport: ConversationTransport {
         } else { queue.append(message) }
     }
     func disconnect() {
+        disconnects += 1
         queue.removeAll()
         let pending = pending
         self.pending = nil
@@ -375,16 +571,30 @@ private final class ResponsePlayer: ConversationPlayer {
     var ends = 0
     var stops = 0
     var fail = false
-    func beginStream() throws { begins += 1 }
+    var holdStart = false
+    var drained = false
+    var onStarted: (() -> Void)?
+    var onFailure: (() -> Void)?
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {
+        begins += 1
+        drained = false
+        self.onStarted = onStarted
+        self.onFailure = onFailure
+    }
     func enqueue(pcm: Data) throws {
         buffers.append(pcm)
         if fail { throw ResponseError.invalid }
+        drained = false
+        if !holdStart { onStarted?() }
     }
     func endStream() async throws {
         ends += 1
+        onStarted?()
+        if drained { return }
         try await withCheckedThrowingContinuation { pending = $0 }
     }
     func finish() {
+        drained = true
         let pending = pending
         self.pending = nil
         pending?.resume()

@@ -49,13 +49,14 @@ public protocol CaptureTimer: AnyObject {
 }
 
 /// Plays 24 kHz mono signed 16-bit little-endian PCM as it arrives.
-/// `beginStream()` once, `enqueue(pcm:)` for each chunk, then `endStream()`, which returns only
+/// `beginStream(onStarted:onFailure:)` once, `enqueue(pcm:)` for each chunk, then `endStream()`, which returns only
 /// after every enqueued chunk has played. `beginStream` and `enqueue` throw if playback cannot
 /// run or has been interrupted. `stop()` discards queued audio and makes a pending
 /// `endStream()` throw `CancellationError`.
 @MainActor
 public protocol ConversationPlayer: AnyObject {
-    func beginStream() throws
+    /// Start means the node started, not first enqueue. Failure is delivered even before EOF.
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws
     func enqueue(pcm: Data) throws
     func endStream() async throws
     func stop()
@@ -97,8 +98,13 @@ public final class SessionController: ObservableObject {
     private var receiver: Task<Void, Never>?
     private var playback: Task<Void, Never>?
     private var response = ResponseAccumulator()
-    /// True once `agent.done` arrived for the reply now playing. Later frames are invalid.
-    private var replyComplete = false
+    private struct Reply {
+        let id = UUID()
+        var playerBegun = false
+        var networkFinished = false
+        var playerDrained = false
+    }
+    private var reply: Reply?
 
     public init(defaults: UserDefaults = .standard, transport: ConversationTransport,
                 recognition: SpeechCapture, timer: CaptureTimer, silenceTimer: CaptureTimer,
@@ -112,7 +118,6 @@ public final class SessionController: ObservableObject {
         self.player = player
         self.log = log
         serverURL = defaults.string(forKey: Self.urlDefaultsKey) ?? Self.exampleURL
-        transport.onDisconnect = { [weak self] in self?.disconnect() }
     }
 
     public var statusText: String {
@@ -139,6 +144,10 @@ public final class SessionController: ObservableObject {
         }
         let id = UUID()
         connectionID = id
+        transport.onDisconnect = { [weak self] in
+            guard let self, self.connectionID == id else { return }
+            self.disconnect()
+        }
         state = .connecting
         do {
             try await transport.connect(to: url)
@@ -155,21 +164,18 @@ public final class SessionController: ObservableObject {
 
     public func disconnect() {
         connectionID = UUID()
-        receiver?.cancel()
-        receiver = nil
-        playback?.cancel()
-        playback = nil
-        response = ResponseAccumulator()
-        replyComplete = false
+        transport.onDisconnect = nil
         captureID = nil
         isFinalizing = false
         isPreparing = false
         isConversationActive = false
         state = .disconnected
+        clearReply()
+        receiver?.cancel()
+        receiver = nil
         timer.cancel()
         silenceTimer.cancel()
         recognition.cancel()
-        player.stop()
         transport.disconnect()
     }
 
@@ -188,21 +194,18 @@ public final class SessionController: ObservableObject {
     public func endConversation() {
         guard isConversationActive else { return }
         isConversationActive = false
-        if state == .waiting || (state == .playing && !replyComplete) {
+        if let reply, !reply.networkFinished {
             disconnect()
             return
         }
-        replyComplete = false
         captureID = nil
         isFinalizing = false
         isPreparing = false
         timer.cancel()
         silenceTimer.cancel()
         recognition.cancel()
-        playback?.cancel()
-        playback = nil
-        player.stop()
-        if state == .recording || state == .playing { state = .ready }
+        clearReply()
+        if state == .recording || state == .waiting || state == .playing { state = .ready }
     }
 
     /// Begins one listening turn. Used by the conversation loop; not exposed in the UI.
@@ -303,6 +306,7 @@ public final class SessionController: ObservableObject {
             let text: String
         }
         let connection = connectionID
+        let pendingReply = Reply()
         do {
             let data = try JSONEncoder().encode(UserText(text: text))
             guard data.count <= 32768 else {
@@ -312,10 +316,12 @@ public final class SessionController: ObservableObject {
                 await resumeListeningIfActive()
                 return
             }
+            reply = pendingReply
+            response = ResponseAccumulator()
             state = .waiting
             try await transport.send(text: String(decoding: data, as: UTF8.self))
         } catch {
-            guard connectionID == connection else { return }
+            guard connectionID == connection, reply?.id == pendingReply.id else { return }
             log("WebSocket send failed")
             errorMessage = "Sending to the server failed."
             disconnect()
@@ -329,29 +335,40 @@ public final class SessionController: ObservableObject {
                     let frame = try await transport.receive()
                     guard let self, self.connectionID == connection, !Task.isCancelled else { return }
                     // Frames are valid while waiting for the reply and while it is still arriving.
-                    guard self.state == .waiting || (self.state == .playing && !self.replyComplete) else {
+                    guard let reply = self.reply, !reply.networkFinished,
+                          self.state == .waiting || self.state == .playing else {
                         throw ResponseError.invalid
                     }
+                    let id = reply.id
                     switch try self.response.consume(frame) {
                     case .text:
                         break
                     case .audio(let pcm):
-                        // The first chunk starts playback; later chunks queue behind it.
+                        // The first chunk prepares the player. Its start callback marks Playing.
                         do {
-                            if self.state == .waiting {
-                                try self.player.beginStream()
-                                self.state = .playing
+                            if !reply.playerBegun {
+                                self.reply?.playerBegun = true
+                                try self.player.beginStream(onStarted: { [weak self] in
+                                    guard let self, self.connectionID == connection,
+                                          self.reply?.id == id else { return }
+                                    self.state = .playing
+                                }, onFailure: { [weak self] in
+                                    guard let self, self.connectionID == connection,
+                                          self.reply?.id == id else { return }
+                                    self.playbackFailed()
+                                })
                             }
+                            guard self.reply?.id == id else { return }
                             try self.player.enqueue(pcm: pcm)
                         } catch {
+                            guard self.reply?.id == id else { return }
                             self.playbackFailed()
                             return
                         }
                     case .done:
-                        guard self.state == .playing else { throw ResponseError.invalid }
-                        self.response = ResponseAccumulator()
-                        self.replyComplete = true
-                        self.finishPlayback(connection: connection)
+                        guard reply.playerBegun else { throw ResponseError.invalid }
+                        self.reply?.networkFinished = true
+                        self.finishPlayback(connection: connection, reply: id)
                     }
                 }
             } catch {
@@ -363,6 +380,16 @@ public final class SessionController: ObservableObject {
         }
     }
 
+    /// Invalidate before stop/cancel, which may synchronously deliver callbacks.
+    private func clearReply() {
+        reply = nil
+        response = ResponseAccumulator()
+        let pending = playback
+        playback = nil
+        pending?.cancel()
+        player.stop()
+    }
+
     private func playbackFailed() {
         log("Audio playback failed")
         errorMessage = "Audio playback failed."
@@ -370,18 +397,24 @@ public final class SessionController: ObservableObject {
     }
 
     // The complete reply has arrived. Listening resumes only after the last chunk has played.
-    private func finishPlayback(connection: UUID) {
+    private func finishPlayback(connection: UUID, reply id: UUID) {
         playback = Task { @MainActor [weak self, player] in
+            guard self?.connectionID == connection, self?.reply?.id == id,
+                  !Task.isCancelled else { return }
             do {
                 try await player.endStream()
-                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                guard let self, self.connectionID == connection, self.reply?.id == id,
+                      !Task.isCancelled else { return }
+                self.reply?.playerDrained = true
+                guard self.reply?.networkFinished == true, self.reply?.playerDrained == true else { return }
                 self.playback = nil
-                self.replyComplete = false
+                self.clearReply()
                 self.state = .ready
                 // Automatic listening: resume right after the complete reply.
                 await self.resumeListeningIfActive()
             } catch {
-                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                guard let self, self.connectionID == connection, self.reply?.id == id,
+                      !Task.isCancelled else { return }
                 self.playbackFailed()
             }
         }

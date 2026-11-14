@@ -5,16 +5,14 @@ import ConvokeCore
 final class PCMPlayer: ConversationPlayer {
     private var engine: AVAudioEngine?
     private var node: AVAudioPlayerNode?
-    private var completion: CheckedContinuation<Void, Error>?
+    private let lifetime = PCMPlaybackLifetime()
     private var observations: [NSObjectProtocol] = []
-    private var playbackID = UUID()
     private var queue = PCMPlaybackQueue()
     private var ended = false
-    private var failure: Error?
     private var streaming = false
 
     /// One engine per reply. Playback starts at 200 ms buffered, or at short-reply EOF.
-    func beginStream() throws {
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {
         stop()
         let format = try Self.makeBuffer(pcm: Data(count: 2)).format
         #if os(iOS)
@@ -28,8 +26,7 @@ final class PCMPlayer: ConversationPlayer {
         self.node = node
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
-        let id = UUID()
-        playbackID = id
+        let id = lifetime.begin(onStarted: onStarted, onFailure: onFailure)
         streaming = true
         observations.append(NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -53,60 +50,63 @@ final class PCMPlayer: ConversationPlayer {
 
     /// Schedules one chunk behind those already queued. Never waits for playback.
     func enqueue(pcm: Data) throws {
-        if let failure { throw failure }
+        try lifetime.check()
         guard streaming, !ended, let node else { throw ResponseError.invalid }
         // Validate the cap before allocating Float32 storage. Scheduled buffers count
         // until dataPlayedBack, including those waiting for the startup threshold.
         var updated = queue
         try updated.append(bytes: pcm.count)
         let buffer = try Self.makeBuffer(pcm: pcm)
-        let id = playbackID
+        guard let id = lifetime.id else { throw ResponseError.invalid }
         let bytes = pcm.count
         queue = updated
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in self?.chunkPlayed(id, bytes: bytes) }
         }
-        if queue.started, !node.isPlaying { node.play() }
+        startIfNeeded()
     }
 
     /// Returns after every enqueued chunk has played.
     func endStream() async throws {
-        if let failure { throw failure }
-        guard streaming, !ended else { throw ResponseError.invalid }
+        try lifetime.check()
+        guard streaming, !ended, let id = lifetime.id else { throw ResponseError.invalid }
         ended = true
         try queue.finish()
         if queue.drained {
-            finishStream()
+            finishStream(id)
             return
         }
-        if queue.started, node?.isPlaying == false { node?.play() }
-        try await withCheckedThrowingContinuation { completion = $0 }
+        startIfNeeded()
+        try await lifetime.wait()
     }
 
     private func chunkPlayed(_ id: UUID, bytes: Int) {
-        guard playbackID == id else { return }
+        guard lifetime.id == id else { return }
         queue.played(bytes: bytes)
         guard queue.drained else { return }
-        let completed = completion
-        completion = nil
-        finishStream()
-        completed?.resume()
+        finishStream(id)
     }
 
     // An audio-engine change or session interruption fails the stream: later
     // enqueue and endStream calls throw, and a waiting endStream fails now.
     private func interrupted(_ id: UUID) {
-        guard playbackID == id, failure == nil else { return }
-        let pending = completion
-        completion = nil
-        teardown()
-        failure = ResponseError.invalid
-        pending?.resume(throwing: ResponseError.invalid)
-    }
-
-    private func finishStream() {
+        guard lifetime.id == id else { return }
+        // Invalidates callbacks and notifies the controller even before endStream.
+        lifetime.fail(id)
         teardown()
         streaming = false
+    }
+
+    private func finishStream(_ id: UUID) {
+        lifetime.succeed(id)
+        teardown()
+        streaming = false
+    }
+
+    private func startIfNeeded() {
+        guard queue.started, let node, !node.isPlaying, let id = lifetime.id else { return }
+        node.play()
+        lifetime.started(id)
     }
 
     static func makeBuffer(pcm: Data) throws -> AVAudioPCMBuffer {
@@ -128,16 +128,12 @@ final class PCMPlayer: ConversationPlayer {
 
     /// Discards queued audio. A pending `endStream()` throws `CancellationError`.
     func stop() {
-        let pending = completion
-        completion = nil
+        lifetime.stop()
         teardown()
         streaming = false
-        failure = nil
-        pending?.resume(throwing: CancellationError())
     }
 
     private func teardown() {
-        playbackID = UUID()
         for observation in observations { NotificationCenter.default.removeObserver(observation) }
         observations.removeAll()
         node?.stop()
