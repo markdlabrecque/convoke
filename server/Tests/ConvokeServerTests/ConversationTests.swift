@@ -5,6 +5,7 @@ import FoundationNetworking
 import Vapor
 import NIOCore
 import NIOPosix
+import NIOWebSocket
 import WebSocketKit
 @testable import ConvokeServer
 
@@ -160,6 +161,7 @@ final class ConversationTests: XCTestCase {
                     }
                 } catch {}  // The connection closed.
                 XCTAssertFalse(sawDone, "\(failure) must not complete the turn")
+                XCTAssertEqual(wire.closeCode, .unexpectedServerError, "Partial source/output failures are 1011")
                 XCTAssertLessThanOrEqual(audioFrames, ConversationProtocol.maxAudioBytes / ConversationProtocol.maxChunkBytes)
             }
         }
@@ -194,6 +196,8 @@ final class ConversationTests: XCTestCase {
         XCTAssertThrowsError(try empty.finish())
         var capped = AudioFramer()
         for _ in 0..<8 { XCTAssertNoThrow(try capped.push(Data(repeating: 0, count: 1 << 20))) }
+        XCTAssertNoThrow(try capped.finish(), "Exactly 8 MiB is valid")
+        XCTAssertThrowsError(try capped.push(Data([0])), "Even one byte beyond the cap fails")
         XCTAssertThrowsError(try capped.push(Data([0, 0])))
     }
 
@@ -527,6 +531,8 @@ private final class WireClient {
         }
         return WireClient(socket: socket, frames: stream.makeAsyncIterator())
     }
+
+    var closeCode: WebSocketErrorCode? { socket.closeCode }
 
     func send(_ text: String) async throws { try await socket.send(text) }
 

@@ -42,11 +42,15 @@ final class KokoroTests: XCTestCase {
     }
 
     @MainActor func testStreamRequestShapeAndPiecesConcatenate() async throws {
-        let parts = [Data([1, 2, 3]), Data([4, 5]), Data([6, 7, 8, 9])]  // a sample split across parts
+        let parts = [Data([1, 2, 3]), Data([4, 5]), Data([6, 7, 8, 9, 10])]  // a sample split across parts
         let stub = Stub()
         let audio = try await withStub(stub, status: .ok, body: Data(), streaming: parts) { synthesizer in
             var all = Data()
-            for try await piece in try await synthesizer.stream("hello there") { all.append(piece) }
+            for try await piece in try await synthesizer.stream("hello there") {
+                XCTAssertFalse(piece.isEmpty)
+                XCTAssertTrue(piece.count.isMultiple(of: 2))
+                all.append(piece)
+            }
             return all
         }
         XCTAssertEqual(audio, Data(parts.joined()))
@@ -65,6 +69,44 @@ final class KokoroTests: XCTestCase {
                 XCTFail("Expected an error for \(status) \(type)")
             } catch is SpeechError {}
         }
+    }
+
+    func testBodyPullerNormalizesOddSplitsAndIgnoresEmptyPieces() async throws {
+        let parts = [Data(), Data([1]), Data(), Data([2, 3, 4]), Data([5]), Data([6]), Data()]
+        let puller = BodyPuller(TestBody(parts.map { ByteBuffer(bytes: $0) }))
+        var result = [Data]()
+        while let part = try await puller.next() { result.append(part) }
+        XCTAssertEqual(result, [Data([1, 2, 3, 4]), Data([5, 6])])
+    }
+
+    func testBodyPullerRejectsEmptyAndTrailingByteEOF() async throws {
+        for parts: [[UInt8]] in [[], [[]], [[1]], [[1, 2], [], [3]]] {
+            let puller = BodyPuller(TestBody(parts.map { ByteBuffer(bytes: $0) }))
+            do {
+                while let _ = try await puller.next() {}
+                XCTFail("Invalid EOF accepted")
+            } catch is SpeechError {}
+        }
+    }
+
+    func testPCMIsNotSniffedForContainerMagic() async throws {
+        let pcm = Data("RIFFabcd".utf8)
+        let puller = BodyPuller(TestBody([ByteBuffer(bytes: pcm)]))
+        let result = try await puller.next()
+        XCTAssertEqual(result, pcm)
+        let eof = try await puller.next()
+        XCTAssertNil(eof)
+    }
+
+    private struct TestBody: AsyncSequence {
+        typealias Element = ByteBuffer
+        let parts: [ByteBuffer]
+        init(_ parts: [ByteBuffer]) { self.parts = parts }
+        struct AsyncIterator: AsyncIteratorProtocol {
+            var iterator: IndexingIterator<[ByteBuffer]>
+            mutating func next() async throws -> ByteBuffer? { iterator.next() }
+        }
+        func makeAsyncIterator() -> AsyncIterator { AsyncIterator(iterator: parts.makeIterator()) }
     }
 
     final class Stub: @unchecked Sendable { var path = "", body = "" }
