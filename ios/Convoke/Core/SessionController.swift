@@ -48,10 +48,16 @@ public protocol CaptureTimer: AnyObject {
     func cancel()
 }
 
-/// Plays in-memory 24 kHz mono signed 16-bit little-endian PCM.
+/// Plays 24 kHz mono signed 16-bit little-endian PCM as it arrives.
+/// `beginStream()` once, `enqueue(pcm:)` for each chunk, then `endStream()`, which returns only
+/// after every enqueued chunk has played. `beginStream` and `enqueue` throw if playback cannot
+/// run or has been interrupted. `stop()` discards queued audio and makes a pending
+/// `endStream()` throw `CancellationError`.
 @MainActor
 public protocol ConversationPlayer: AnyObject {
-    func play(pcm: Data) async throws
+    func beginStream() throws
+    func enqueue(pcm: Data) throws
+    func endStream() async throws
     func stop()
 }
 
@@ -91,6 +97,8 @@ public final class SessionController: ObservableObject {
     private var receiver: Task<Void, Never>?
     private var playback: Task<Void, Never>?
     private var response = ResponseAccumulator()
+    /// True once `agent.done` arrived for the reply now playing. Later frames are invalid.
+    private var replyComplete = false
 
     public init(defaults: UserDefaults = .standard, transport: ConversationTransport,
                 recognition: SpeechCapture, timer: CaptureTimer, silenceTimer: CaptureTimer,
@@ -152,6 +160,7 @@ public final class SessionController: ObservableObject {
         playback?.cancel()
         playback = nil
         response = ResponseAccumulator()
+        replyComplete = false
         captureID = nil
         isFinalizing = false
         isPreparing = false
@@ -173,15 +182,17 @@ public final class SessionController: ObservableObject {
     }
 
     /// Ends the conversation. Capture and playback are cancelled. The
-    /// connection stays open unless a reply is still being buffered: the
-    /// protocol cannot cancel a turn, so that case closes the connection.
+    /// connection stays open unless the server is still sending the reply (waiting, or
+    /// playing before `agent.done`): the protocol cannot cancel a turn, so that case
+    /// closes the connection.
     public func endConversation() {
         guard isConversationActive else { return }
         isConversationActive = false
-        if state == .waiting {
+        if state == .waiting || (state == .playing && !replyComplete) {
             disconnect()
             return
         }
+        replyComplete = false
         captureID = nil
         isFinalizing = false
         isPreparing = false
@@ -317,26 +328,30 @@ public final class SessionController: ObservableObject {
                 while !Task.isCancelled {
                     let frame = try await transport.receive()
                     guard let self, self.connectionID == connection, !Task.isCancelled else { return }
-                    guard self.state == .waiting else { throw ResponseError.invalid }
-                    if let pcm = try self.response.consume(frame) {
-                        self.response = ResponseAccumulator()
-                        self.state = .playing
-                        self.playback = Task { @MainActor [weak self, player = self.player] in
-                            guard !Task.isCancelled, self?.connectionID == connection else { return }
-                            do {
-                                try await player.play(pcm: pcm)
-                                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
-                                self.playback = nil
-                                self.state = .ready
-                                // Automatic listening: resume right after the complete reply.
-                                await self.resumeListeningIfActive()
-                            } catch {
-                                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
-                                self.log("Audio playback failed")
-                                self.errorMessage = "Audio playback failed."
-                                self.disconnect()
+                    // Frames are valid while waiting for the reply and while it is still arriving.
+                    guard self.state == .waiting || (self.state == .playing && !self.replyComplete) else {
+                        throw ResponseError.invalid
+                    }
+                    switch try self.response.consume(frame) {
+                    case .text:
+                        break
+                    case .audio(let pcm):
+                        // The first chunk starts playback; later chunks queue behind it.
+                        do {
+                            if self.state == .waiting {
+                                try self.player.beginStream()
+                                self.state = .playing
                             }
+                            try self.player.enqueue(pcm: pcm)
+                        } catch {
+                            self.playbackFailed()
+                            return
                         }
+                    case .done:
+                        guard self.state == .playing else { throw ResponseError.invalid }
+                        self.response = ResponseAccumulator()
+                        self.replyComplete = true
+                        self.finishPlayback(connection: connection)
                     }
                 }
             } catch {
@@ -344,6 +359,30 @@ public final class SessionController: ObservableObject {
                 self.log("WebSocket receive or response validation failed")
                 self.errorMessage = "The connection to the server failed."
                 self.disconnect()
+            }
+        }
+    }
+
+    private func playbackFailed() {
+        log("Audio playback failed")
+        errorMessage = "Audio playback failed."
+        disconnect()
+    }
+
+    // The complete reply has arrived. Listening resumes only after the last chunk has played.
+    private func finishPlayback(connection: UUID) {
+        playback = Task { @MainActor [weak self, player] in
+            do {
+                try await player.endStream()
+                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                self.playback = nil
+                self.replyComplete = false
+                self.state = .ready
+                // Automatic listening: resume right after the complete reply.
+                await self.resumeListeningIfActive()
+            } catch {
+                guard let self, self.connectionID == connection, !Task.isCancelled else { return }
+                self.playbackFailed()
             }
         }
     }

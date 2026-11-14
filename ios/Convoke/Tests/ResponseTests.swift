@@ -16,12 +16,12 @@ final class ResponseDecodingTests: XCTestCase {
         try frame(["type": "agent.done", "chunks": count])
     }
 
-    func testOrderedAudioIsReturnedOnlyOnMatchingDone() throws {
+    func testAudioIsEmittedPerChunkAndDoneOnlyOnMatchingCount() throws {
         var response = ResponseAccumulator()
-        XCTAssertNil(try response.consume(text()))
-        XCTAssertNil(try response.consume(audio()))
-        XCTAssertNil(try response.consume(audio(4, sequence: 1)))
-        XCTAssertEqual(try response.consume(done(2)), Data(repeating: 128, count: 6))
+        XCTAssertEqual(try response.consume(text()), .text)
+        XCTAssertEqual(try response.consume(audio()), .audio(Data(repeating: 128, count: 2)))
+        XCTAssertEqual(try response.consume(audio(4, sequence: 1)), .audio(Data(repeating: 128, count: 4)))
+        XCTAssertEqual(try response.consume(done(2)), .done)
     }
 
     func testMalformedFramesAndUnexpectedOrderAreRejected() throws {
@@ -66,11 +66,11 @@ final class ResponseDecodingTests: XCTestCase {
         var response = ResponseAccumulator()
         _ = try response.consume(text())
         for sequence in 0..<512 {
-            XCTAssertNil(try response.consume(audio(16384, sequence: sequence)))
+            XCTAssertEqual(try response.consume(audio(16384, sequence: sequence)), .audio(Data(repeating: 128, count: 16384)))
         }
         var overflowing = response
         XCTAssertThrowsError(try overflowing.consume(audio(2, sequence: 512)))
-        XCTAssertEqual(try response.consume(done(512))?.count, 8 * 1024 * 1024)
+        XCTAssertEqual(try response.consume(done(512)), .done)
     }
 }
 
@@ -134,6 +134,72 @@ final class ResponseLifecycleTests: XCTestCase {
         session.disconnect()
     }
 
+    private func audioFrame(_ sequence: Int, _ data: String = "AID/fw==") -> URLSessionWebSocketTask.Message {
+        .string(#"{"type":"agent.audio","sequence":\#(sequence),"data":"\#(data)"}"#)
+    }
+
+    func testPlaybackStartsOnFirstChunkBeforeDoneAndQueuesLaterChunks() async {
+        await setup()
+        await session.startConversation()
+        await session.submitCapture()
+        transport.push(.string(#"{"type":"agent.text","text":"You said: hello"}"#))
+        transport.push(audioFrame(0))
+        await waitFor(.playing)
+        XCTAssertEqual(player.begins, 1)
+        XCTAssertEqual(player.buffers, [Data([0, 128, 255, 127])])
+        XCTAssertEqual(player.ends, 0, "The reply is not complete yet")
+        transport.push(audioFrame(1, "AAA="))
+        while player.buffers.count < 2 { await Task.yield() }
+        XCTAssertEqual(player.begins, 1, "Later chunks queue on the same stream")
+        XCTAssertEqual(player.buffers.last, Data([0, 0]))
+        XCTAssertEqual(session.state, .playing)
+        XCTAssertEqual(speech.starts, 1, "Microphone stays off while the reply streams")
+        transport.push(.string(#"{"type":"agent.done","chunks":2}"#))
+        while player.pending == nil { await Task.yield() }
+        XCTAssertEqual(session.state, .playing, "Still playing until the last chunk has played")
+        XCTAssertEqual(speech.starts, 1)
+        player.finish()
+        await waitFor(.recording)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertTrue(logs.isEmpty)
+        session.disconnect()
+    }
+
+    func testEndConversationWhileReplyStillStreamingClosesConnection() async {
+        await setup()
+        await session.startConversation()
+        await session.submitCapture()
+        transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
+        transport.push(audioFrame(0))
+        await waitFor(.playing)
+        session.endConversation()
+        XCTAssertEqual(session.state, .disconnected, "The server is still sending; the protocol cannot cancel it")
+        XCTAssertGreaterThan(player.stops, 0)
+        XCTAssertEqual(speech.starts, 1)
+    }
+
+    func testInvalidChunkMidStreamStopsPlaybackAndDisconnects() async {
+        await setup()
+        await submit()
+        transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
+        transport.push(audioFrame(0))
+        await waitFor(.playing)
+        transport.push(audioFrame(5))  // sequence gap
+        await waitFor(.disconnected)
+        XCTAssertGreaterThan(player.stops, 0)
+        XCTAssertEqual(player.buffers.count, 1, "The invalid chunk is never played")
+        XCTAssertEqual(logs, ["WebSocket receive or response validation failed"])
+    }
+
+    func testDoneWithoutAudioIsInvalid() async {
+        await setup()
+        await submit()
+        transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
+        transport.push(.string(#"{"type":"agent.done","chunks":0}"#))
+        await waitFor(.disconnected)
+        XCTAssertEqual(player.begins, 0)
+    }
+
     func testInvalidInputInReadyRecordingWaitingAndPlayingDisconnects() async {
         for state in [SessionController.State.ready, .recording, .waiting, .playing] {
             await setup()
@@ -173,7 +239,8 @@ final class ResponseLifecycleTests: XCTestCase {
         transport.onDisconnect?()
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertTrue(transport.queue.isEmpty)
-        XCTAssertTrue(player.buffers.isEmpty)
+        XCTAssertGreaterThan(player.stops, 0)
+        player.buffers.removeAll()
         await session.connect()
         XCTAssertEqual(transport.sent.count, 1)
         await submit()
@@ -302,12 +369,19 @@ private final class ResponseTransport: ConversationTransport {
 @MainActor
 private final class ResponsePlayer: ConversationPlayer {
     var pending: CheckedContinuation<Void, Error>?
+    /// Every chunk enqueued, in order.
     var buffers: [Data] = []
+    var begins = 0
+    var ends = 0
     var stops = 0
     var fail = false
-    func play(pcm: Data) async throws {
+    func beginStream() throws { begins += 1 }
+    func enqueue(pcm: Data) throws {
         buffers.append(pcm)
         if fail { throw ResponseError.invalid }
+    }
+    func endStream() async throws {
+        ends += 1
         try await withCheckedThrowingContinuation { pending = $0 }
     }
     func finish() {

@@ -244,7 +244,9 @@ private final class TransportTestTimer: CaptureTimer {
 
 @MainActor
 private final class TransportTestPlayer: ConversationPlayer {
-    func play(pcm: Data) async throws {}
+    func beginStream() throws {}
+    func enqueue(pcm: Data) throws {}
+    func endStream() async throws {}
     func stop() {}
 }
 #endif

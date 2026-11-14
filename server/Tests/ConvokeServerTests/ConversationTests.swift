@@ -98,6 +98,105 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+    func testAudioIsSentBeforeSynthesisFinishes() async throws {
+        let (pieces, feed) = AsyncThrowingStream<Data, Error>.makeStream()
+        try await withServer(stream: { _ in pieces }) { socket in
+            let wire = try await WireClient.connect(socket)
+            try await wire.send(self.userText("hi"))
+            let text = try await wire.next()
+            XCTAssertEqual(text["type"] as? String, "agent.text")
+            feed.yield(Data(repeating: 1, count: 100))
+            // Synthesis has not finished, yet the first frame arrives.
+            let first = try await wire.next()
+            XCTAssertEqual(first["type"] as? String, "agent.audio")
+            XCTAssertEqual(first["sequence"] as? Int, 0)
+            XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(first["data"] as? String)), Data(repeating: 1, count: 100))
+            // A piece may split a 16-bit sample: the odd byte joins the next piece.
+            feed.yield(Data([5]))
+            feed.yield(Data([6, 7, 8]))
+            let second = try await wire.next()
+            XCTAssertEqual(second["sequence"] as? Int, 1)
+            XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(second["data"] as? String)), Data([5, 6, 7, 8]))
+            feed.finish()
+            let done = try await wire.next()
+            XCTAssertEqual(done["type"] as? String, "agent.done")
+            XCTAssertEqual(done["chunks"] as? Int, 2)
+            // The connection takes a second turn.
+            try await wire.send(self.userText("again"))
+            let again = try await wire.next()
+            XCTAssertEqual(again["type"] as? String, "agent.text")
+        }
+    }
+
+    func testStreamFailuresAfterPartialAudioCloseWithoutDone() async throws {
+        enum Failure: CaseIterable { case thrown, oddFinalByte, empty, overCap }
+        for failure in Failure.allCases {
+            try await withServer(stream: { _ in
+                AsyncThrowingStream<Data, Error> { continuation in
+                    switch failure {
+                    case .thrown:
+                        continuation.yield(Data([0, 0]))
+                        continuation.finish(throwing: SpeechError.http(status: 500))
+                    case .oddFinalByte:
+                        continuation.yield(Data([1, 2, 3]))
+                        continuation.finish()
+                    case .empty:
+                        continuation.finish()
+                    case .overCap:
+                        for _ in 0...8 { continuation.yield(Data(repeating: 0, count: 1 << 20)) }
+                        continuation.finish()
+                    }
+                }
+            }) { socket in
+                let wire = try await WireClient.connect(socket)
+                try await wire.send(self.userText("test"))
+                var audioFrames = 0
+                var sawDone = false
+                do {
+                    while true {
+                        let frame = try await wire.next()
+                        if frame["type"] as? String == "agent.done" { sawDone = true }
+                        if frame["type"] as? String == "agent.audio" { audioFrames += 1 }
+                    }
+                } catch {}  // The connection closed.
+                XCTAssertFalse(sawDone, "\(failure) must not complete the turn")
+                XCTAssertLessThanOrEqual(audioFrames, ConversationProtocol.maxAudioBytes / ConversationProtocol.maxChunkBytes)
+            }
+        }
+    }
+
+    func testDisconnectCancelsStreamingSynthesis() async throws {
+        let cancelled = expectation(description: "Stream consumer cancelled")
+        let started = expectation(description: "Stream started")
+        try await withServer(stream: { _ in
+            AsyncThrowingStream<Data, Error> { continuation in
+                continuation.yield(Data([0, 0]))
+                started.fulfill()
+                continuation.onTermination = { _ in cancelled.fulfill() }
+            }
+        }) { socket in
+            try await socket.send(.string(self.userText("test")))
+            await self.fulfillment(of: [started], timeout: 3)
+            socket.cancel(with: .goingAway, reason: nil)
+            await self.fulfillment(of: [cancelled], timeout: 3)
+        }
+    }
+
+    func testAudioFramerSplitsCarriesAndEnforcesCap() throws {
+        var framer = AudioFramer()
+        XCTAssertEqual(try framer.push(Data([1])).count, 0)
+        let chunks = try framer.push(Data(repeating: 9, count: 16_384 * 2))  // 1 carried + 32768 = odd
+        XCTAssertEqual(chunks.map(\.count), [16_384, 16_384])
+        XCTAssertThrowsError(try framer.finish(), "A carried half sample is invalid")
+        XCTAssertNoThrow(try framer.push(Data([0])))
+        XCTAssertNoThrow(try framer.finish())
+        var empty = AudioFramer()
+        XCTAssertThrowsError(try empty.finish())
+        var capped = AudioFramer()
+        for _ in 0..<8 { XCTAssertNoThrow(try capped.push(Data(repeating: 0, count: 1 << 20))) }
+        XCTAssertThrowsError(try capped.push(Data([0, 0])))
+    }
+
     func testInvalidFramesCloseConnection() async throws {
         let invalid: [URLSessionWebSocketTask.Message] = [
             .string("{"), .string(try userText(" \n")),
@@ -367,11 +466,12 @@ final class ConversationTests: XCTestCase {
         timeout: TimeAmount = .seconds(10),
         agent: any Agent = EchoTestAgent(),
         synthesize: Conversation.Synthesize? = nil,
+        stream: Conversation.SynthesizeStream? = nil,
         body: (URLSessionWebSocketTask) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)
         do {
-            try configure(app, turnTimeout: timeout, synthesize: synthesize, agent: agent)
+            try configure(app, turnTimeout: timeout, synthesize: synthesize, stream: stream, agent: agent)
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let session = URLSession(configuration: .ephemeral)
