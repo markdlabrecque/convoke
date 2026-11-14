@@ -11,7 +11,7 @@ let package = Package(
             name: "ConvokeCoreTests", dependencies: ["ConvokeCore"], path: ".",
             exclude: ["Core", "App/ContentView.swift",
                       "App/ConvokeApp.swift", "App/Info.plist", "Convoke.xcodeproj",
-                      "README.md", "project.yml"],
+                      "README.md", "project.yml", "scripts"],
             sources: ["Tests", "App/WebSocketTransport.swift", "App/AppleSpeechCapture.swift", "App/PCMPlayer.swift"]
         )
     ]

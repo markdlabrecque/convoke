@@ -99,6 +99,58 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+    func testIncrementalCumulativeBoundaryOnWire() async throws {
+        let cap = ConversationProtocol.maxAudioBytes
+        for total in [cap - 2, cap, cap + 2] {
+            let source = BoundarySource(bytes: total)
+            try await withServer(stream: { _ in AsyncThrowingStream(unfolding: { await source.next() }) }) { socket in
+                let wire = try await WireClient.connect(socket)
+                try await wire.send(self.userText("fixture"))
+                let text = try await wire.next()
+                XCTAssertEqual(text["type"] as? String, "agent.text")
+                var bytes = 0, chunks = 0
+                var completed = false
+                do {
+                    while true {
+                        let frame = try await wire.next()
+                        if frame["type"] as? String == "agent.done" {
+                            XCTAssertEqual(frame["chunks"] as? Int, chunks)
+                            completed = true
+                            break
+                        }
+                        XCTAssertEqual(frame["type"] as? String, "agent.audio")
+                        XCTAssertEqual(frame["sequence"] as? Int, chunks)
+                        let pcm = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
+                        XCTAssertFalse(pcm.isEmpty)
+                        XCTAssertTrue(pcm.count.isMultiple(of: 2))
+                        XCTAssertLessThanOrEqual(pcm.count, 16_384)
+                        bytes += pcm.count
+                        chunks += 1
+                    }
+                } catch {
+                    if total <= cap { throw error }
+                }
+                XCTAssertEqual(completed, total <= cap)
+                XCTAssertLessThanOrEqual(bytes, cap)
+                if completed { XCTAssertEqual(bytes, total) }
+                else { XCTAssertEqual(wire.closeCode, .unexpectedServerError) }
+            }
+        }
+    }
+
+    private actor BoundarySource {
+        var remaining: Int
+        var pulls = 0
+        init(bytes: Int) { remaining = bytes }
+        func next() -> Data? {
+            guard remaining > 0 else { return nil }
+            let size = min(remaining, pulls.isMultiple(of: 2) ? 16_383 : 16_385)
+            pulls += 1
+            remaining -= size
+            return Data(repeating: UInt8(pulls % 251), count: size)
+        }
+    }
+
     func testAudioIsSentBeforeSynthesisFinishes() async throws {
         let (pieces, feed) = AsyncThrowingStream<Data, Error>.makeStream()
         try await withServer(stream: { _ in pieces }) { socket in
@@ -184,6 +236,116 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+    @MainActor func testGatedSocketAndSynthesisOrderingAcrossTwoTurns() async throws {
+        let app = try await Application.make(.testing)
+        let source = GatedSynthesis()
+        let (attempts, feed) = AsyncStream<WriteAttempt>.makeStream()
+        var writes = attempts.makeAsyncIterator()
+        app.get("conversation") { _ -> Response in
+            let response = Response(status: .switchingProtocols)
+            response.upgrader = ConversationUpgrader { socket in
+                _ = Conversation(socket: socket, timeout: .seconds(10), agent: EchoTestAgent(),
+                    synthesize: { _ in fatalError("must use the consumer boundary") },
+                    consume: { _, consumer in try await source.produce(on: socket.eventLoop, consumer: consumer) },
+                    sendFrame: { frame in
+                        let gate = socket.eventLoop.makePromise(of: Void.self)
+                        feed.yield(WriteAttempt(frame: frame, gate: gate))
+                        return gate.futureResult.flatMap {
+                            let sent = socket.eventLoop.makePromise(of: Void.self)
+                            socket.send(frame, promise: sent)
+                            return sent.futureResult
+                        }
+                    })
+            }
+            return response
+        }
+        do {
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
+            let session = URLSession(configuration: .ephemeral)
+            defer { session.invalidateAndCancel(); feed.finish() }
+            let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+            let wire = try await WireClient.connect(socket)
+            let watchdog = Task {
+                try await Task.sleep(nanoseconds: 20_000_000_000)
+                feed.finish()
+                await app.server.shutdown()
+            }
+            defer { watchdog.cancel() }
+            for turn in 1...2 {
+                try await wire.send(self.userText("fixture"))
+                let textAttempt = await writes.next()
+                let text = try XCTUnwrap(textAttempt)
+                XCTAssertEqual(try text.object()["type"] as? String, "agent.text")
+                XCTAssertEqual(source.calls, turn - 1, "Synthesis waits for the text write")
+                text.gate.succeed(())
+                let receivedText = try await wire.next()
+                XCTAssertEqual(receivedText["type"] as? String, "agent.text")
+
+                let firstAttempt = await writes.next()
+                let first = try XCTUnwrap(firstAttempt)
+                XCTAssertEqual(source.afterFirst, turn - 1, "Source is suspended inside the first socket write")
+                XCTAssertEqual(try first.object()["sequence"] as? Int, 0)
+                first.gate.succeed(())
+                let firstAudio = try await wire.next()
+                XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(firstAudio["data"] as? String)), Data(repeating: 1, count: 16_384))
+
+                let secondAttempt = await writes.next()
+                let second = try XCTUnwrap(secondAttempt)
+                XCTAssertEqual(source.completed, turn - 1, "Forwarded audio precedes source EOF")
+                XCTAssertEqual(try second.object()["sequence"] as? Int, 1)
+                second.gate.succeed(())
+                let secondAudio = try await wire.next()
+                XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(secondAudio["data"] as? String)), Data([1, 2]), "Preserve the carried sample")
+                await fulfillment(of: [source.atEOF[turn - 1]], timeout: 3)
+                XCTAssertEqual(source.completed, turn - 1)
+                source.eof[turn - 1].succeed(())
+                let doneAttempt = await writes.next()
+                let done = try XCTUnwrap(doneAttempt)
+                XCTAssertEqual(try done.object()["type"] as? String, "agent.done")
+                XCTAssertEqual(try done.object()["chunks"] as? Int, 2)
+                XCTAssertEqual(source.completed, turn)
+                done.gate.succeed(())
+                let receivedDone = try await wire.next()
+                XCTAssertEqual(receivedDone["type"] as? String, "agent.done")
+            }
+        } catch {
+            await app.server.shutdown()
+            try? await app.asyncShutdown()
+            throw error
+        }
+        await app.server.shutdown()
+        try await app.asyncShutdown()
+    }
+
+    private struct WriteAttempt {
+        let frame: String
+        let gate: EventLoopPromise<Void>
+        func object() throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frame.utf8)) as? [String: Any])
+        }
+    }
+
+    @MainActor private final class GatedSynthesis {
+        var calls = 0, afterFirst = 0, completed = 0
+        var eof: [EventLoopPromise<Void>] = []
+        let atEOF = (0..<2).map { XCTestExpectation(description: "source waiting at EOF \($0)") }
+        func produce(on loop: any EventLoop, consumer: PCMConsumer) async throws {
+            let index = calls
+            calls += 1
+            let gate = loop.makePromise(of: Void.self)
+            eof.append(gate)
+            try await consumer(Data(repeating: 1, count: 16_385))
+            afterFirst += 1
+            try await consumer(Data([2]))
+            try await CancellableWrite.run(on: loop) {
+                self.atEOF[index].fulfill()
+                return gate.futureResult
+            }
+            completed += 1
+        }
+    }
+
     func testAudioFramerSplitsCarriesAndEnforcesCap() throws {
         var framer = AudioFramer()
         XCTAssertEqual(try framer.push(Data([1])).count, 0)
@@ -199,6 +361,34 @@ final class ConversationTests: XCTestCase {
         XCTAssertNoThrow(try capped.finish(), "Exactly 8 MiB is valid")
         XCTAssertThrowsError(try capped.push(Data([0])), "Even one byte beyond the cap fails")
         XCTAssertThrowsError(try capped.push(Data([0, 0])))
+    }
+
+    func testSampleAndFrameBoundaryMatrixAndCumulativeCarryCap() throws {
+        let pcm = Data((0..<32_772).map { UInt8($0 % 251) })
+        for split in [0, 1, 2, 16_383, 16_384, 16_385, 32_769, pcm.count] {
+            var framer = AudioFramer()
+            let first = try framer.push(Data(pcm.prefix(split)))
+            XCTAssertEqual(first.reduce(0) { $0 + $1.count }, split - split % 2,
+                           "Forward whole samples immediately, not only full frames")
+            let rest = try framer.push(Data(pcm.dropFirst(split)))
+            let chunks = first + rest
+            XCTAssertEqual(Data(chunks.joined()), pcm, "Split \(split) preserves every byte in order")
+            for chunk in chunks {
+                XCTAssertFalse(chunk.isEmpty)
+                XCTAssertTrue(chunk.count.isMultiple(of: 2))
+                XCTAssertLessThanOrEqual(chunk.count, 16_384)
+            }
+            XCTAssertEqual(framer.totalBytes, pcm.count)
+            try framer.finish()
+        }
+        var exact = AudioFramer()
+        for _ in 0..<511 { _ = try exact.push(Data(count: 16_384)) }
+        _ = try exact.push(Data(count: 16_383))
+        XCTAssertThrowsError(try exact.finish(), "An odd total just below the cap is not valid EOF")
+        _ = try exact.push(Data([7]))
+        XCTAssertEqual(exact.totalBytes, ConversationProtocol.maxAudioBytes)
+        try exact.finish()
+        XCTAssertThrowsError(try exact.push(Data([8])), "The carried half-sample counts against the cumulative cap")
     }
 
     func testInvalidFramesCloseConnection() async throws {
@@ -403,41 +593,84 @@ final class ConversationTests: XCTestCase {
 
     // Opt-in: needs a running Kokoro sidecar, e.g. CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880.
     // Prints sizes and timings only; audio is neither saved nor logged.
-    func testKokoroSidecarSmoke() async throws {
+    @MainActor func testKokoroSidecarSmoke() async throws {
         guard let url = ProcessInfo.processInfo.environment["CONVOKE_TEST_KOKORO_URL"] else {
             throw XCTSkip("Set CONVOKE_TEST_KOKORO_URL to exercise a real Kokoro sidecar")
         }
-        setenv("CONVOKE_KOKORO_URL", url, 1)
-        defer { unsetenv("CONVOKE_KOKORO_URL") }
-        try await withServer(timeout: .seconds(60)) { socket in
-            let wire = try await WireClient.connect(socket)
-            let start = ContinuousClock.now
-            try await wire.send(self.userText("Testing one two three."))
-            let reply = try await wire.next()
-            XCTAssertEqual(reply["type"] as? String, "agent.text")
-            var firstChunk: Duration?
-            var bytes = 0, chunks = 0
-            var nonSilent = false
-            while true {
-                let frame = try await wire.next()
-                if frame["type"] as? String == "agent.done" {
-                    XCTAssertEqual(frame["chunks"] as? Int, chunks)
-                    break
+        var environment = ["CONVOKE_KOKORO_URL": url]
+        environment["CONVOKE_KOKORO_VOICE"] = ProcessInfo.processInfo.environment["CONVOKE_KOKORO_VOICE"]
+        let config = try XCTUnwrap(KokoroConfig(environment: environment))
+        let httpApp = try await Application.make(.testing)
+        let source = SmokeSource(KokoroSpeechSynthesizer(client: httpApp.client, config: config, http: httpApp.http.client.shared))
+        do {
+            try await withServer(timeout: .seconds(60), stream: { try await source.stream($0) }) { socket in
+                let wire = try await WireClient.connect(socket)
+                let start = ContinuousClock.now
+                source.start = start
+                try await wire.send(self.userText("Testing one two three."))
+                let reply = try await wire.next()
+                XCTAssertEqual(reply["type"] as? String, "agent.text")
+                var firstChunk: Duration?
+                var bytes = 0, chunks = 0
+                var nonSilent = false
+                while true {
+                    let frame = try await wire.next()
+                    if frame["type"] as? String == "agent.done" {
+                        XCTAssertEqual(frame["chunks"] as? Int, chunks)
+                        break
+                    }
+                    XCTAssertEqual(frame["type"] as? String, "agent.audio")
+                    XCTAssertEqual(frame["sequence"] as? Int, chunks)
+                    if firstChunk == nil { firstChunk = ContinuousClock.now - start }
+                    let chunk = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
+                    XCTAssertFalse(chunk.isEmpty)
+                    XCTAssertTrue(chunk.count.isMultiple(of: 2))
+                    XCTAssertLessThanOrEqual(chunk.count, 16384)
+                    nonSilent = nonSilent || chunk.contains { $0 != 0 }
+                    bytes += chunk.count
+                    chunks += 1
                 }
-                XCTAssertEqual(frame["type"] as? String, "agent.audio")
-                XCTAssertEqual(frame["sequence"] as? Int, chunks)
-                if firstChunk == nil { firstChunk = ContinuousClock.now - start }
-                let chunk = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
-                XCTAssertLessThanOrEqual(chunk.count, 16384)
-                nonSilent = nonSilent || chunk.contains { $0 != 0 }
-                bytes += chunk.count
-                chunks += 1
+                let total = ContinuousClock.now - start
+                XCTAssertTrue(nonSilent)
+                XCTAssertTrue(bytes.isMultiple(of: 2))
+                XCTAssertGreaterThan(chunks, 1, "A sentence is more than one 16 KiB chunk")
+                XCTAssertLessThanOrEqual(bytes, ConversationProtocol.maxAudioBytes)
+                XCTAssertEqual(source.bytes, bytes)
+                let firstPCM = try XCTUnwrap(source.firstPCM)
+                let synthesisEOF = try XCTUnwrap(source.eof)
+                XCTAssertLessThanOrEqual(firstPCM, synthesisEOF)
+                print("KOKORO-SMOKE bytes=\(bytes) audioSeconds=\(Double(bytes) / 48_000) chunks=\(chunks) sourcePieces=\(source.pieces) firstPCM=\(firstPCM) synthesisEOF=\(synthesisEOF) firstWireAudio=\(firstChunk!) wireDone=\(total)")
+                // These same-clock measurements describe synthesis and transport only.
+                // Neither multiple chunks nor this test proves early physical playback.
             }
-            let total = ContinuousClock.now - start
-            XCTAssertTrue(nonSilent)
-            XCTAssertTrue(bytes.isMultiple(of: 2))
-            XCTAssertGreaterThan(chunks, 1, "A sentence is more than one 16 KiB chunk")
-            print("KOKORO-SMOKE bytes=\(bytes) audioSeconds=\(Double(bytes) / 48_000) chunks=\(chunks) firstChunk=\(firstChunk!) total=\(total)")
+        } catch {
+            try? await httpApp.asyncShutdown()
+            throw error
+        }
+        try await httpApp.asyncShutdown()
+    }
+
+    @MainActor private final class SmokeSource {
+        let synthesizer: KokoroSpeechSynthesizer
+        var iterator: AsyncThrowingStream<Data, Error>.Iterator?
+        var start = ContinuousClock.now
+        var firstPCM: Duration?, eof: Duration?
+        var bytes = 0, pieces = 0
+        init(_ synthesizer: KokoroSpeechSynthesizer) { self.synthesizer = synthesizer }
+        func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error> {
+            iterator = try await synthesizer.stream(text).makeAsyncIterator()
+            return AsyncThrowingStream(unfolding: { try await self.next() })
+        }
+        func next() async throws -> Data? {
+            guard var iterator else { throw ConversationError.invalidAudio }
+            let piece = try await iterator.next()
+            self.iterator = iterator
+            if let piece {
+                if firstPCM == nil { firstPCM = ContinuousClock.now - start }
+                pieces += 1
+                bytes += piece.count
+            } else { eof = ContinuousClock.now - start }
+            return piece
         }
     }
 
