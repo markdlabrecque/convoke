@@ -2,7 +2,7 @@
 
 Developer-only. There is no authentication or TLS on the server or the app. Use a trusted tailnet and restrict access on the Mac (firewall, tailnet ACLs). Tailscale does not protect other reachable interfaces.
 
-This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification), tracked by #30 under epic #25. Streaming TTS is now implemented; its physical acceptance remains Pending. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
+This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification), tracked by #30 under epic #25. Streaming TTS is now implemented; its acceptance is blocked by the [Mac follow-up failures](#mac-follow-up-after-owner-authorized-ssh) and pending physical checks. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
 
 ## Requirements
 
@@ -169,11 +169,11 @@ The owner reported all three physical turns passing on November 12 2026 and conf
 
 ## Slice 4 streaming verification
 
-This is the #30 verification record for epic #25. It does not replace the historical tables above. Acceptance is **Pending**, not complete. Automated results below were rerun; earlier #27/#28/#29 counts are not relabeled as current results.
+This is the #30 verification record for epic #25. It does not replace the historical tables above. Acceptance is **blocked**, not complete. Automated results below were rerun; earlier #27/#28/#29 counts are not relabeled as current results. The initial Linux snapshot is followed by an authorized Mac run. Read both, especially the Mac cancellation failures; Linux passes do not override them.
 
-### Environment and provenance
+### Initial Linux environment and provenance
 
-| Field | Actual value for this verification |
+| Field | Actual value for the initial Linux verification |
 | --- | --- |
 | Date | November 14, 2026, run started 11:58 MST |
 | Checkout / branch | `/home/mark/Projects/convoke/code/main`, `slice-4-30`, created from fetched `origin/main` in this existing checkout |
@@ -192,9 +192,9 @@ Read the full ticket, epic, approved Q&A/plan comments and `docs/slice-4-{27,28,
 
 The supplied #29 premerge commit `f49daf7f46301fee436cd32adae086dc5f2b2fbb` is not an ancestor after the squash merge. `git diff --exit-code f49daf7f46301fee436cd32adae086dc5f2b2fbb origin/main` exited 0 with no output, confirming identical trees at branch creation.
 
-### Commands and fresh results
+### Initial Linux commands and fresh results
 
-From repository root, run individually and record exit codes. No transcript, PCM or arbitrary response body is captured. Temporary build/test logs are local compiler/XCTest output, not committed session recordings.
+The Pending Apple rows in this initial snapshot are superseded where actually run by the Mac follow-up below. From repository root, run individually and record exit codes. No transcript, PCM or arbitrary response body is captured. Temporary build/test logs are local compiler/XCTest output, not committed session recordings.
 
 ```sh
 git fetch origin
@@ -251,11 +251,85 @@ Opt-in smoke timing output, all seconds relative to **one monotonic request star
 
 These prove source/wire delivery before source EOF in these short synthetic replies. They do **not** prove the iPhone started speaking before EOF. The measured first-wire-to-EOF window is only a few milliseconds, far less than the intended 200 ms startup buffer. A long real reply and physical evidence are still required. No latency SLA is invented.
 
-Local logs: `/tmp/convoke-30-server-build.log`, `/tmp/convoke-30-server-tests.log`, `/tmp/convoke-30-ios-tests.log`, `/tmp/convoke-30-portable-tests.log`, `/tmp/convoke-30-smoke.log`, `/tmp/convoke-30-server-real-tests.log`, `/tmp/convoke-30-http-gates.log`, `/tmp/convoke-30-turn-gates.log`. No production, 1Password, remote-machine change, new thread, subagent, automatic fallback or persisted transcript/audio was used.
+Local logs: `/tmp/convoke-30-server-build.log`, `/tmp/convoke-30-server-tests.log`, `/tmp/convoke-30-ios-tests.log`, `/tmp/convoke-30-portable-tests.log`, `/tmp/convoke-30-smoke.log`, `/tmp/convoke-30-server-real-tests.log`, `/tmp/convoke-30-http-gates.log`, `/tmp/convoke-30-turn-gates.log`. The initial Linux run used no production, 1Password, remote-machine change, new thread, subagent, automatic fallback or persisted transcript/audio.
+
+### Mac follow-up after owner-authorized SSH
+
+On November 14, 2026 the owner authorized SSH to `macbook` and updates to `~/Projects/convoke`. The agent inspected a clean checkout on `issue-23-kokoro-verification`, fetched origin, and created local `slice-4-30` tracking the existing PR branch at `1fd8bce8843d10f3a0bfa0bb02152c4aa310fcb9`. Initial checks tested that commit. Final checks tested that runtime plus the opt-in tests added to `ios/Convoke/Tests/PCMPlayerTests.swift`; no production source changed.
+
+| Field | Actual Mac environment |
+| --- | --- |
+| Date / time | November 14, 2026, started 12:49 MST |
+| Host / path | `macbook`, `/Users/mark/Projects/convoke` |
+| Hardware / OS | Apple M4 Pro, arm64; macOS 27.0.1, build 26A434 |
+| Xcode / Swift | Xcode 27.2, build 27B52; Apple Swift 6.4.2, target arm64-apple-macosx27.0.0 |
+| Simulator used | iPhone 17, iOS 27.2; UDID `E58183BA-D034-4773-B504-D1053EE3141E`, present in `xcrun simctl list devices available` |
+| Device | No physical iPhone session or result |
+| Existing services | Local Ollama, Convoke and pinned `convoke-kokoro` were already running. None was stopped, restarted or reconfigured |
+| Mac sidecar | Docker Engine 29.8.2; pinned v0.10.0 digest matches the Linux record; localhost-only binding. Existing container uses `json-file` logging, so no new speech requests were sent through it |
+
+From Mac repo root, these were run over SSH. Service processes were not started; no tmux, production, credential store, transcript/audio capture or new thread/subagent was used. The new runtime tests synthesize **silence in memory**, not speech, and capture no audio.
+
+```sh
+swift build --package-path server
+swift test --package-path server
+swift test --package-path server --filter StreamingFailureTests
+CONVOKE_TEST_SYSTEM_VOICE=1 swift test --package-path server --filter testSystemVoiceSmoke
+CONVOKE_TEST_SYSTEM_VOICE=1 swift test --package-path server
+swift test --package-path ios/Convoke
+CONVOKE_TEST_AUDIO_ENGINE=1 swift test --package-path ios/Convoke
+CONVOKE_TEST_AUDIO_ENGINE=1 swift test --package-path ios/Convoke --filter PCMPlayerRuntimeTests
+xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO build-for-testing
+xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
+  -destination 'platform=iOS Simulator,id=E58183BA-D034-4773-B504-D1053EE3141E' \
+  CODE_SIGNING_ALLOWED=NO test
+TEST_RUNNER_CONVOKE_TEST_AUDIO_ENGINE=1 xcodebuild \
+  -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
+  -destination 'platform=iOS Simulator,id=E58183BA-D034-4773-B504-D1053EE3141E' \
+  CODE_SIGNING_ALLOWED=NO test
+xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
+  -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+```
+
+| Check | Status | Actual output / scope |
+| --- | --- | --- |
+| Mac server build | Pass | Exit 0. Compiles the macOS voice adapter |
+| Initial Mac server tests | Fail | Exit 1; 56 tests, 2 optional skips, 5 failed assertions in upstream cancellation checks |
+| Focused cancellation repeat | Fail | Exit 1; same five upstream-closure assertions. Not dismissed as a flaky first run |
+| System-voice smoke | Pass | Exit 0; 1 test, 0 failures. Actual macOS synthesis adapter, not a physical iPhone result |
+| Mac server suite with system voice enabled | Fail | Exit 1; 56 tests, 1 optional Kokoro skip, 5 failed assertions. System voice passes; cancellation still fails |
+| Initial Apple iOS package | Pass | Exit 0; 94 tests, 0 failures, including macOS-only live WebSocket tests. No fake Combine |
+| Final Apple iOS package with actual engine enabled | Pass | Exit 0; 96 tests, 0 failures, no skips. Includes two new macOS AVAudioEngine runtime tests |
+| Focused actual macOS engine tests | Pass | Exit 0; 2 tests, 0 failures. Three additional focused repeats each pass with 2 tests, 0 failures |
+| Limited Linux core follow-up after adding opt-in tests | Pass | `bash ios/Convoke/scripts/test-portable-core.sh`, exit 0; 73 tests, 0 failures. Apple-only additions are excluded on Linux, not counted as passing |
+| Simulator build-for-testing | Pass | Exit 0; `** TEST BUILD SUCCEEDED **`, rerun after adding tests |
+| Initial simulator tests | Pass | Exit 0; 86 tests, 0 failures, `** TEST SUCCEEDED **`, before new opt-in tests |
+| Final default simulator tests | Pass | Exit 0; 89 tests, 3 explicit opt-in engine skips, 0 failures, `** TEST SUCCEEDED **` |
+| Opt-in actual iOS engine tests in simulator | Fail | Exit 65. Each of the 3 new runtime tests aborts during audio initialization with `Initialize: RPC timeout. Apparently deadlocked. Aborting now.` XCTest restarts the runner. The later 0-test suite summary is **not** a pass |
+| Unsigned generic iPhoneOS build | Pass | Exit 0; `** BUILD SUCCEEDED **`, rerun after adding tests. Not a signed install or physical device run |
+| Actual iOS session interruption / route changes | Pending | Synthetic interruption observer test compiles, but audio initialization aborts before it can execute. No real interruption or configuration-change result |
+| Real Mac Ollama/Kokoro turns | Pending | Pre-existing services preserved. Existing sidecar logging not changed or used for new content requests; Linux real-sidecar smoke remains separate evidence |
+| Physical early sound, continuity and three hands-free turns | Pending | No owner report or independently observed device session |
+
+The new opt-in `PCMPlayerRuntimeTests` run the production `PCMPlayer` against an actual engine. On macOS they verify startup at 9600 bytes, short EOF flush, `dataPlayedBack` completion, cancellation of a pending drain by explicit stop, and replacement-stream completion. These are real Apple adapter checks, not queue fakes, but silent-buffer completion cannot establish audible iPhone output or acoustic continuity. The iOS-only case posts a synthetic interruption notification; even if it passes later, that would test observer wiring, not an actual phone interruption.
+
+#### Cancellation failure details
+
+The failed expectation is `upstream HTTP channel closed`, bounded by 3 seconds. It fails in `testCancellationDuringBodyReadClosesRealUpstreamRequest`, `testCancellationDuringSlowWriteClosesRealUpstreamRequest`, `testFailedWriteClosesRealUpstreamRequest`, and both disconnect/deadline iterations of `testConversationDisconnectAndTimeoutCancelRealRequest`. Downstream cancellation returns, but the peer-close assertion does not complete. The truncated-body test and final-done-write deadline test pass.
+
+A temporary sizes/content-free lifetime probe in `BodyPuller` showed its deinitialization after the focused failed-write test run rather than before the close expectation. That suggests delayed stream/iterator release on the Apple build, but does not establish the exact root cause. The probe was removed and production source restored byte-for-byte. No assertion was weakened, timeout increased or test retired. Treat real upstream cancellation on Mac as **unverified and failing**, not as a passing Linux contract. It must be resolved before acceptance.
+
+#### Simulator audio initialization blocker
+
+Opt-in tests exercise the real adapter only when `CONVOKE_TEST_AUDIO_ENGINE=1`. Xcode receives it through `TEST_RUNNER_CONVOKE_TEST_AUDIO_ENGINE=1`. The default suite deliberately skips them because it must remain usable without an audio route. An experimental app-hosted test runner also hit the same RPC timeout, so simply adding a test host did not solve it. Temporary project/host changes were reverted; no speculative runner change is included. A command-line host override also failed at linking and was discarded. The normal simulator build/test remains passing, while the opt-in simulator audio result remains Fail. It is not evidence of physical-device failure or success.
+
+Mac logs are under `/tmp/convoke-30-mac-*.log`: `server-build`, `server-tests`, `cancellation-repeat`, `system-voice`, `server-final`, `ios-tests`, `ios-final`, `engine-tests`, `engine-repeat-{1,2,3}`, `simulator-build-final`, `simulator-default-final`, `simulator-final`, `simulator-hosted-final`, and `device-build-final`. They are local build/test diagnostics, not committed recordings. Inspecting service transcripts or device logs was not needed. The follow-up Linux log is `/tmp/convoke-30-portable-followup.log`. The selected simulator was Shutdown at completion, matching its initial state; other booted simulators were left alone.
 
 ### Owner handoff: Mac and iPhone
 
-Owner participation is required in this T3 thread. Do not mark #30 or epic #25 complete from the Linux results. Record owner-reported checks explicitly as **owner-reported**, with date, tested SHA, dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, Ollama model, image digest and voice. Leave every unrun or inconclusive row Pending. No Mac changes have been made remotely by this work.
+The agent has now performed the available Mac builds and tests above. The remaining owner session is for the physical rows, after the cancellation failure is resolved; the commands below are retained for reproduction, not a request to repeat passing builds. Owner participation is required in this T3 thread. Do not mark #30 or epic #25 complete from the Linux results. Record owner-reported checks explicitly as **owner-reported**, with date, tested SHA, dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, Ollama model, image digest and voice. Leave every unrun or inconclusive row Pending. Mac checkout updates and tests above were performed only after the owner explicitly authorized SSH. Pre-existing services were preserved.
 
 1. On the Mac, obtain this PR branch and record `git rev-parse HEAD` and `git status --short`. Run `sw_vers`, `xcodebuild -version`, `swift --version`, `docker version --format '{{.Server.Version}}'`. Fill in the actual phone model/iOS from Settings. Do not reuse the #23 environment without reconfirming it.
 2. From repo root run the following Apple checks. Select an installed simulator from the listing; substitute its actual UDID for the shell variable before the final test command. Report exit status, tests/skips/failures and the build-success markers, without saving content-bearing device console output.
