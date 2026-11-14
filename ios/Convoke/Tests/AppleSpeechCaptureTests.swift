@@ -212,7 +212,7 @@ private final class SpeechTestTimer: CaptureTimer {
 
 @MainActor
 private final class SpeechTestPlayer: ConversationPlayer {
-    func beginStream() throws {}
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {}
     func enqueue(pcm: Data) throws {}
     func endStream() async throws {}
     func stop() {}

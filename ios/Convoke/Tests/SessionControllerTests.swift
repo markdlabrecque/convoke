@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import ConvokeCore
 
 @MainActor
@@ -590,7 +593,7 @@ private final class FakeTimer: CaptureTimer {
 @MainActor
 private final class FakePlayer: ConversationPlayer {
     var stops = 0
-    func beginStream() throws {}
+    func beginStream(onStarted: @escaping () -> Void, onFailure: @escaping () -> Void) throws {}
     func enqueue(pcm: Data) throws {}
     func endStream() async throws {}
     func stop() { stops += 1 }
