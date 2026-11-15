@@ -20,13 +20,13 @@ jobs:
   capture:
     runs-on: macos-latest
     timeout-minutes: 35
-    env:
-      APPLE_TEST_OUTPUT_DIR: ${{ runner.temp }}/convoke-apple-results
     steps:
       - uses: actions/checkout@v4
       - name: Validate script failure propagation with fake tools
         run: ios/Convoke/scripts/test-apple-driver.sh
       - name: Validate invalid simulator override
+        env:
+          APPLE_TEST_OUTPUT_DIR: ${{ runner.temp }}/convoke-apple-results
         working-directory: ${{ runner.temp }}
         shell: bash
         run: |
@@ -38,6 +38,8 @@ jobs:
           test "$status" -ne 0
           grep -q 'SIMULATOR_UDID is invalid/unavailable' invalid-simulator.log
       - name: Run shared Apple checks from outside the repository
+        env:
+          APPLE_TEST_OUTPUT_DIR: ${{ runner.temp }}/convoke-apple-results
         working-directory: ${{ runner.temp }}
         run: '"$GITHUB_WORKSPACE/ios/Convoke/scripts/test-apple.sh"'
       - name: Preserve Apple logs and result bundles
@@ -49,7 +51,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/invalid-simulator.log
-            ${{ env.APPLE_TEST_OUTPUT_DIR }}/**/*.log
-            ${{ env.APPLE_TEST_OUTPUT_DIR }}/**/*.json
-            ${{ env.APPLE_TEST_OUTPUT_DIR }}/**/*.txt
-            ${{ env.APPLE_TEST_OUTPUT_DIR }}/**/*.xcresult
+            ${{ runner.temp }}/convoke-apple-results/**/*.log
+            ${{ runner.temp }}/convoke-apple-results/**/*.json
+            ${{ runner.temp }}/convoke-apple-results/**/*.txt
+            ${{ runner.temp }}/convoke-apple-results/**/*.xcresult
