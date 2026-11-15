@@ -36,7 +36,7 @@ The server binds `0.0.0.0` and has **no application authentication or TLS**. Res
 
 ## Linux
 
-The server builds and tests on Linux (`swift build`, `swift test` in `server/`). Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Without Kokoro, only macOS has a synthesizer, so on Linux (unless `CONVOKE_KOKORO_URL` is set) each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. The chunked-audio tests read frames with WebSocketKit's client, because Linux's `URLSessionWebSocketTask` truncates large messages.
+The server builds and tests on Linux; see the [automated checks guide](../docs/development.md#automated-checks) for root-relative commands and CI check names. Speech goes through the `SpeechSynthesizer` protocol (`Sources/ConvokeServer/SpeechSynthesizer.swift`). Without Kokoro, only macOS has a synthesizer, so on Linux (unless `CONVOKE_KOKORO_URL` is set) each turn sends `agent.text`, logs `No speech synthesizer is available on this platform`, and closes the connection without audio. The chunked-audio tests read frames with WebSocketKit's client, because Linux's `URLSessionWebSocketTask` truncates large messages.
 
 ## Kokoro speech (optional sidecar)
 
@@ -89,18 +89,7 @@ Transcripts and audio stay in memory. The application neither writes them to dis
 
 ## Tests
 
-On a Mac, run `swift build` first: it is the only check that compiles the macOS voice code, which Linux skips.
-
-```sh
-cd server
-swift build
-swift test
-# Also exercise a running Kokoro sidecar over a local WebSocket (sizes and timings only):
-CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 CONVOKE_KOKORO_VOICE=af_heart \
-  swift test --filter testKokoroSidecarSmoke
-# Also exercise the installed voice over a local WebSocket for two turns:
-CONVOKE_TEST_SYSTEM_VOICE=1 swift test
-```
+Use the [automated checks guide](../docs/development.md#automated-checks) for server build/test commands, prerequisites, actual CI names, optional Kokoro smoke and system-voice reproduction links. Run the server build on a Mac to compile the macOS voice adapter, which Linux excludes. The shared Apple app command does not run the server suite. See the [ongoing physical-device smoke checklist](../docs/development.md#ongoing-physical-device-smoke) for audio changes and releases; unrelated server changes do not require the complete phone checklist.
 
 The default XCTest suite injects the agent and synthesis and needs no audio hardware or model. A stubbed endpoint checks the agent request shape, auth header and error handling. It covers validation, wire and fragmented-message limits, invalid UTF-8, ordering and chunk counts, sequential turns, failure closure, timeout and disconnect cancellation. Regression tests check conversation deallocation, unacknowledged close handshakes, stalled writes, and masking/reserved-bit violations on complete and fragmented wire frames. Converter tests use generated PCM buffers to check resampling, mono Int16 little-endian output, and the cap during accumulation. Tests bind loopback on an ephemeral port, regardless of the run-time host and port configuration.
 

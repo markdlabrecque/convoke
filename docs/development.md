@@ -34,26 +34,66 @@ This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro bas
 
 ## Automated checks
 
-Run on the Mac. Record the exact output in the results table below.
+Run these commands from the repository root. Default suites need no model, microphone, phone or external service. Loopback integration tests start their own peers.
+
+| Tier | Local command | Prerequisites and CI check | Establishes / excludes |
+| --- | --- | --- | --- |
+| Server | `swift build --package-path server` then `swift test --package-path server` | Swift 6.4+ for committed dependency resolution. CI uses Ubuntu 24.04, `swift:6.4.2-noble`; **Server build and tests (Linux)** in `Swift Linux` | Protocol, HTTP/source/socket gates, limits and cancellation regressions. Linux excludes macOS voice code; real Kokoro is an explicit opt-in skip. Does not clear the known Mac cancellation failures. |
+| Limited portable core | `bash ios/Convoke/scripts/test-portable-core.sh` | Bash and Swift 6.0+; verified in CI with Swift 6.4.2. **Limited portable core (Combine stand-in)** in `Swift Linux` | Controller, validator, queue and lifetime subset in a temporary package with a test-only Combine stand-in. Not Combine publication, Apple adapters, capture or AVAudioEngine. |
+| Apple | `bash ios/Convoke/scripts/test-apple.sh` | macOS 26+, full selected Xcode 26+, Swift 6.2+, iPhoneOS/iPhoneSimulator SDKs 26+, Python 3, Git and an installed available iPhone simulator on iOS 26+. **capture** in `iOS` | Full real-Combine Apple package tests, actual simulator `test` execution, then unsigned generic iPhoneOS compilation. No server suite, opt-in engine, real speech or physical audio evidence. An unsigned build is not a signed install or device test. |
+
+The Apple package needs macOS 26 for `SpeechAnalyzer`; the server's Swift 6.4 requirement is separate. Do not downgrade SDKs to make a check pass. The Apple script rejects incompatible tools/OS/SDKs and missing or invalid simulator destinations with a nonzero exit, not a passing skip. It chooses the newest installed compatible runtime, then stable device name/UDID order, without downloading runtimes. To override it:
 
 ```sh
-# From the repository root; subshells keep later paths relative to root.
-(cd server && swift build && swift test)
-(cd ios/Convoke && swift test)
-xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO build-for-testing
-xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
-  -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
-# Choose an available simulator from xcrun simctl list devices available.
-xcodebuild -project ios/Convoke/Convoke.xcodeproj -scheme Convoke \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.2' \
-  CODE_SIGNING_ALLOWED=NO test
+xcrun simctl list devices available
+# Set this to an actual available iPhone UDID from the listing.
+SIMULATOR_UDID=your-installed-iphone-udid bash ios/Convoke/scripts/test-apple.sh
 ```
 
-`swift test` in `ios/Convoke` needs macOS 26 because `SpeechAnalyzer` requires it. Controller and adapter tests use fakes and need no microphone, speech model, phone or external server.
+The script resolves paths independently of the caller's directory. `APPLE_TEST_OUTPUT_DIR` optionally sets the parent of a unique `convoke-apple.*` results directory, otherwise under `$TMPDIR` or `/tmp`. After prerequisite validation, it prints SHA, dirty-tree state, environment and destination, retains available stage output on success or failure, including `driver.log`, `package.log`, `simulator.log`, `simulator-summary.json`, `device-build.log` and result bundles, and reports its exit status and results path. Prerequisite errors before directory creation go to stderr. A failed stage stops later stages; package/simulator summaries must contain nonzero passing tests. Inspect the failing stage, not just a build-success marker. The portable script prints XCTest output and deletes its temporary package on exit; retain terminal output if needed.
+
+See the implemented [Linux workflow](../.github/workflows/swift-linux.yml), [Apple workflow](../.github/workflows/ios.yml) and [Apple script](../ios/Convoke/scripts/test-apple.sh). Both workflows run on matching pull requests and pushes to main. Linux watches `server/**`, `ios/**`, `protocol/**` and its own workflow; Apple watches `ios/**`, `protocol/**` and its own workflow. A docs-only change outside those paths does not trigger them. Apple CI also checks fake-tool failure propagation and an invalid simulator override, and uploads `apple-results-<SHA>` diagnostics even on failure, retained for 14 days. Default Apple checks explicitly clear optional test environment variables; setting an opt-in flag on this shared command does not enable real-engine tests.
+
+### Optional real dependencies and known blockers
+
+These are not mandatory passing PR gates. Use the existing [localhost-only Kokoro/Rex setup](../server/README.md#kokoro-speech-optional-sidecar), pinned to `ghcr.io/remsky/kokoro-fastapi-cpu:v0.10.0`, bound only to `127.0.0.1:8880`, with `af_heart`. Do not add service automation or model downloads to default checks. After the optional sidecar is healthy:
+
+```sh
+CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 CONVOKE_KOKORO_VOICE=af_heart \
+  swift test --package-path server --filter testKokoroSidecarSmoke
+```
+
+That smoke uses a stub agent and proves non-silent source/wire PCM, not real agent generation or audible iPhone playback. For optional system-voice and real-engine commands, see the [Mac reproduction commands and results](#mac-follow-up-after-owner-authorized-ssh). Silent engine buffers are not acoustic evidence. The [Mac upstream cancellation failures](#cancellation-failure-details) and [opt-in simulator audio initialization failure](#simulator-audio-initialization-blocker) remain unresolved. Neither a Linux pass nor default Apple skips fix or waive them.
+
+### Current CI verification
+
+Inspected actual run logs on November 15, 2026, including checked-out SHAs, environment, XCTest totals, simulator result summary and unsigned build marker. Counts below are suite totals including skips, not all passing tests. This evidence is separate from historical records and physical acceptance.
+
+| Run | Tested checkout SHA | Actual result |
+| --- | --- | --- |
+| Linux PR #44 [43746963280](https://github.com/markdlabrecque/convoke/actions/runs/43746963280) | `067fca98615533a5f1b21002ac98b932d593b8da`, PR merge checkout | Pass. Server build; server 51 tests, 1 skip, 0 failures; portable 73 tests, 0 skips/failures. Ubuntu 24.04, Swift 6.4.2. |
+| Linux main [43747593799](https://github.com/markdlabrecque/convoke/actions/runs/43747593799) | `adebaa0cc85a62adc77d1b9f493e5ddcd3dd7d6f` | Pass. Same environment and totals as Linux PR run. Kokoro skipped; macOS voice excluded. |
+| Apple PR #43 [43746632840](https://github.com/markdlabrecque/convoke/actions/runs/43746632840) | `f5b9e43ef24dbedf0f060de2beba996f4c1bfcc7`, PR merge checkout | Pass. Package 96 tests, 2 skips, 0 failures; simulator 89 total, 86 passed, 3 skipped, 0 failed; unsigned device `BUILD SUCCEEDED`. macOS 26.7.2, Xcode 26.6, Swift 6.3.3, iPhone 17 simulator / iOS 26.5. |
+| Apple main [43747250497](https://github.com/markdlabrecque/convoke/actions/runs/43747250497) | `cfdc615697f533b19945744b0619fe34086ead6e` | Pass. Same environment and totals as Apple PR run. Two package / three simulator real-engine tests explicitly skipped. No Mac server or physical phone execution. |
+
+### Ongoing physical-device smoke
+
+For playback, capture or audio-session changes and releases, install the signed app on a physical iPhone and run the short checks below against the development Mac. Docs-only or unrelated server changes do not require repeating the complete phone checklist. Add focused deterministic regressions for new failures where feasible; there is no coverage-percentage target.
+
+Record date, tested SHA and dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, agent/model, voice/sidecar version and digest, plus whether each result was owner-reported or directly observed and by whom. Use Pass/Fail/Pending per row. Record outcomes and sizes/timings only, never transcripts or audio. Leave unrun or inconclusive checks Pending.
+
+| Check | Expected outcome | Result |
+| --- | --- | --- |
+| Sequential audible turns | Three complete replies without touching the phone between turns; no missing/repeated/reordered audio; listening resumes only after the final playback sample | Pending |
+| End before and after EOF/done | Before validated done, End stops audio/capture and disconnects. After done but before queued playback drains, End stops audio and keeps Ready; Start works. No stale callback restarts capture/playback | Pending |
+| Lifecycle and audio session | Exercise background, Disconnect, a real interruption and a route/configuration change. Audio/capture stop, expected disconnect/error appears, no automatic restart | Pending |
+| Streaming behavior changes | Long real Kokoro reply starts audibly before real source EOF and remains continuous. Use the [Slice 4 observation method and limits](#owner-handoff-mac-and-iphone); network frames or silent callbacks alone are insufficient | Pending |
+
+This is an ongoing smoke checklist, not a replacement for the initial full [Slice 4 acceptance](#physical-checklist-and-results) in [#30](https://github.com/markdlabrecque/convoke/issues/30) under [#25](https://github.com/markdlabrecque/convoke/issues/25). Both remain open. All original failed/unrun rows below remain unchanged; current CI does not retrospectively pass them.
 
 ### Recorded automated results
+
+Historical Slice 3 record, not current CI evidence.
 
 Status values are `Pending` (not run), `Pass`, or `Fail`. Only the owner changes a row from Pending, and only after running the command. Do not copy results from another machine.
 

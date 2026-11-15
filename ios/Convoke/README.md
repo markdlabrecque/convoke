@@ -34,32 +34,11 @@ The app has no bearer token or application authentication. Use only a trusted de
 
 ## Tests and builds
 
-From this directory on a Mac with Xcode installed:
-
-```sh
-# Controller and adapter tests, no microphone, phone, or external server required.
-# Transport integration tests start their own loopback-only WebSocket peers.
-swift test
-
-# Compile the app and its iOS unit test bundle without a booted simulator.
-xcodebuild -project Convoke.xcodeproj -scheme Convoke \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO build-for-testing
-
-# Execute those same tests in an installed iPhone simulator.
-# Replace the name with an available device from xcrun simctl list devices available.
-xcodebuild -project Convoke.xcodeproj -scheme Convoke \
-  -destination 'platform=iOS Simulator,name=iPhone 17' test
-
-# Compile for a physical device without signing or installing.
-xcodebuild -project Convoke.xcodeproj -scheme Convoke \
-  -sdk iphoneos -destination 'generic/platform=iOS' \
-  CODE_SIGNING_ALLOWED=NO build
-```
+Use the [automated checks guide](../../docs/development.md#automated-checks) for the shared Apple command, prerequisites, simulator override, failure logs and exact CI check names. It also covers the limited Linux core command and optional real-engine checks. The [ongoing physical-device smoke checklist](../../docs/development.md#ongoing-physical-device-smoke) describes when a signed phone run is needed; default Apple passes and unsigned builds do not establish physical audio behavior.
 
 Tests cover persistence, connection lifecycle and failures, state gating, JSON encoding, empty results, UTF-8 and frame limits, the 2.5-second silence and 60-second capture timers, automatic listening after playback, End conversation during every state, visible errors, cleanup, and late callbacks after disconnect. Controller tests use fakes. On macOS, localhost integration tests exercise the actual transport without an application receive, including remote close, missing pong, reconnection, cancellation, and raw-frame delivery. Adapter tests exercise premature completion through the controller, finalized-segment joining, volatile-text exclusion, speech-activity reporting, finalization cancellation, and the five-second deadline without permissions, speech models or microphone access. The same adapter sources compile in the Swift package test target; only iOS audio-session configuration is conditional. The package targets macOS 26 because SpeechAnalyzer requires it. Model download, microphone input and actual recognition need a physical-phone check, which is Pending for the owner (not run in the Linux implementation environment).
 
-On Linux, `bash scripts/test-portable-core.sh` runs a limited controller/validator/queue/lifetime subset in a temporary package with a test-only Combine stand-in. It does not test Combine publishing, Apple adapters or audio hardware and is not a full Apple package pass. See the [Slice 4 regression matrix and results](../../docs/slice-4-29-verification.md) for exact scope and Pending Apple checks.
+On Linux, the portable command in the guide runs a limited controller/validator/queue/lifetime subset in a temporary package with a test-only Combine stand-in. It does not test Combine publishing, Apple adapters or audio hardware and is not a full Apple package pass. See the [Slice 4 regression matrix and results](../../docs/slice-4-29-verification.md) for exact scope and Pending Apple checks.
 
 ## Response playback
 
