@@ -367,6 +367,85 @@ Opt-in tests exercise the real adapter only when `CONVOKE_TEST_AUDIO_ENGINE=1`. 
 
 Mac logs are under `/tmp/convoke-30-mac-*.log`: `server-build`, `server-tests`, `cancellation-repeat`, `system-voice`, `server-final`, `ios-tests`, `ios-final`, `engine-tests`, `engine-repeat-{1,2,3}`, `simulator-build-final`, `simulator-default-final`, `simulator-final`, `simulator-hosted-final`, and `device-build-final`. They are local build/test diagnostics, not committed recordings. Inspecting service transcripts or device logs was not needed. The follow-up Linux log is `/tmp/convoke-30-portable-followup.log`. The selected simulator was Shutdown at completion, matching its initial state; other booted simulators were left alone.
 
+### Completed-harness refresh, November 15, 2026
+
+This follow-up for [#42](https://github.com/markdlabrecque/convoke/issues/42) applies the completed [#38](https://github.com/markdlabrecque/convoke/issues/38) automation to Slice 4. It adds fresh software evidence, not physical acceptance. [#30](https://github.com/markdlabrecque/convoke/issues/30) and [#25](https://github.com/markdlabrecque/convoke/issues/25) remain open. All historical tables, including the Mac failures above, are preserved.
+
+#### Revision and evidence inspected
+
+The tested integrated `main` revision is [`94a35a7509a778b75b0b57215690b730425ecd2f`](https://github.com/markdlabrecque/convoke/commit/94a35a7509a778b75b0b57215690b730425ecd2f). It includes Linux PR #44 at `adebaa0`, Apple PR #43 at `cfdc615`, and command/evidence guide PR #45 at `94a35a7`. All three are ancestors of this checkout. This refresh changes documentation only.
+
+On November 15, the agent inspected the full exact-SHA job logs with `gh-axi run view RUN --log`, checked the run API's `head_sha`, and downloaded the Apple artifact with `gh-axi run download 43748973393`. This is direct inspection of hosted CI evidence, not a new local Apple run or owner-reported device result. The Apple `driver.log` reports an empty dirty-tree state. Linux jobs log the same checkout SHA but do not separately print a dirty-tree status. The local documentation checkout was clean before this edit; no local runtime test result is claimed.
+
+| Evidence | Actual environment and result |
+| --- | --- |
+| [Linux run 43748973341](https://github.com/markdlabrecque/convoke/actions/runs/43748973341), jobs [server](https://github.com/markdlabrecque/convoke/actions/runs/43748973341/job/132918462256) and [portable core](https://github.com/markdlabrecque/convoke/actions/runs/43748973341/job/132918462273) | November 15, 18:50 UTC start; Ubuntu 24.04 hosted runners, `swift:6.4.2-noble`, Swift 6.4.2, `x86_64-unknown-linux-gnu`. Server build Pass; server XCTest total 51, 1 skip, 0 failures, so 50 passed. Portable total 73, 0 skips/failures. |
+| [Apple run 43748973393](https://github.com/markdlabrecque/convoke/actions/runs/43748973393/job/132918462523) | November 15, 18:50 UTC start; macOS 26.7.2 build 25G332, arm64; Xcode 26.6 build 17F113; Apple Swift 6.3.3, target `arm64-apple-macosx26.0`; iPhoneOS and simulator SDK 26.5. Real-Combine package total 96, 2 skips, 0 failures, so 94 passed. Simulator total 89, 3 skips, 0 failures, so 86 passed. Unsigned generic iPhoneOS build Pass. Shared command exits 0. |
+| [Apple artifact 14175428048](https://github.com/markdlabrecque/convoke/actions/runs/43748973393/artifacts/14175428048) | Downloaded and inspected `convoke-apple.dTWUSG/{driver.log,package.log,simulator.log,simulator-summary.json,device-build.log,destination.txt,simulators.json}`. Includes `simulator.xcresult` and `device-build.xcresult`. Simulator summary exported by `xcresulttool` on the Mac agrees with XCTest: 86 passed, 3 skipped, 0 failed, `Passed`. Raw result bundles are retained, not re-decoded on Linux. Artifact retention is 14 days; it was available during this review. |
+| [Protocol run 43748973351](https://github.com/markdlabrecque/convoke/actions/runs/43748973351/job/132918462174) | Same SHA and date; Factory model/provider tests 7 passed, 0 failed. JSON command reports **0 protocol JSON files**. Job success proves command execution, not protocol schema coverage. |
+
+Apple simulator discovery selected iPhone 17, iOS 26.5 build 23F77, arm64, UDID `23C8F95C-765D-46A9-AE82-0BEE2921C8D7`. `destination.txt`, discovery JSON, the invocation, and the result summary agree. Logs show `** TEST SUCCEEDED **` and `** BUILD SUCCEEDED **`, not merely a simulator build-for-testing. The two skipped package cases are actual-engine threshold/short-EOF drain and stop/restart. Simulator skips those same two plus the injected session-interruption adapter case, all explicitly requiring `CONVOKE_TEST_AUDIO_ENGINE=1`. Linux skips `testKokoroSidecarSmoke` because `CONVOKE_TEST_KOKORO_URL` is unset; macOS system voice is excluded on Linux, not counted as a skip or pass.
+
+#### Commands actually executed
+
+The Linux jobs ran these commands, not a full Apple package command with a Combine substitute:
+
+```sh
+swift build --package-path server
+swift test --package-path server
+bash ios/Convoke/scripts/test-portable-core.sh
+```
+
+Apple CI ran `ios/Convoke/scripts/test-apple.sh` by absolute checkout path from the runner's temporary directory, with `APPLE_TEST_OUTPUT_DIR=/Users/runner/work/_temp/convoke-apple-results`. For this run the script expanded to the following test/build commands. Paths and the discovered destination are recorded here so the evidence can be reproduced without guessing a simulator:
+
+```sh
+package_dir=/Users/runner/work/convoke/convoke/ios/Convoke
+output_dir=/Users/runner/work/_temp/convoke-apple-results/convoke-apple.dTWUSG
+xcrun swift test --package-path "$package_dir" --scratch-path "$output_dir/swift-build"
+xcodebuild -project "$package_dir/Convoke.xcodeproj" -scheme Convoke \
+  -destination 'platform=iOS Simulator,id=23C8F95C-765D-46A9-AE82-0BEE2921C8D7' \
+  -destination-timeout 120 -parallel-testing-enabled NO \
+  -derivedDataPath "$output_dir/simulator-derived-data" \
+  -resultBundlePath "$output_dir/simulator.xcresult" CODE_SIGNING_ALLOWED=NO test
+xcrun xcresulttool get test-results summary --path "$output_dir/simulator.xcresult"
+xcodebuild -project "$package_dir/Convoke.xcodeproj" -scheme Convoke \
+  -sdk iphoneos -destination 'generic/platform=iOS' \
+  -derivedDataPath "$output_dir/device-derived-data" \
+  -resultBundlePath "$output_dir/device-build.xcresult" CODE_SIGNING_ALLOWED=NO build
+```
+
+The script retains tee'd logs, exports the simulator summary, and checks nonzero passing test counts. It deliberately unsets audio-engine, system-voice and Kokoro opt-ins. Setting those variables around this default command would not rerun the optional checks. Apple CI also passed the existing fake-tool driver checks and rejected an invalid simulator override before compilation. These script checks are not application/device acceptance.
+
+#### Coverage inventory and acceptance mapping
+
+Pass in this table applies only to the stated automated contract at the tested SHA/platform. It never changes a physical row below. The suite/test names are present in the inspected logs and retained source fixtures.
+
+| Slice 4 requirement / original row | Classification and fresh evidence | Remaining acceptance boundary |
+| --- | --- | --- |
+| Server build, strict PCM/message limits, odd splits, empty/trailing EOF and source errors | Default automation, Pass on Linux. `KokoroTests`, `ConversationTests` and `StreamingBoundsTests` cover their respective server/client boundaries. | Apple CI does not run the Mac server suite. No new Mac server build/test result. |
+| First delivery before source EOF; sequential wire turns and backpressure | Default automation, Pass on Linux. `testHTTPHeadersPiecesAndEOFAreIndependent`, `testAudioIsSentBeforeSynthesisFinishes`, `testGatedSocketAndSynthesisOrderingAcrossTwoTurns`, and `testConsumerWriteBackpressuresFurtherSourcePulls` passed. | Deterministic gates prove source/socket ordering only. Real Ollama/Kokoro early **audible** playback remains Pending. |
+| Disconnect, slow/failed write, deadline, truncated body; no successful done after failure | Default automation, Pass on Linux. All 7 `StreamingFailureTests` passed, including real upstream peer-close assertions and stalled final-done deadline. Connection lifecycle gates also passed. | Known Mac cancellation Fail remains unresolved. The Linux test-only WebSocket client added by PR #44 is not a Mac cancellation fix; Apple keeps URLSession and Apple CI tests only the iOS package/app. |
+| Full Apple package, simulator execution, unsigned iPhoneOS build | Default automation, Pass within the counts/skips above. Replaces the need for an owner to repeat the initial Linux snapshot's unavailable Apple software commands on this revision. | Compilation is not signing, installation, a phone session, or actual-engine execution. |
+| 9600-byte startup, short EOF flush, ordered accounting, 8 MiB cap/release, underrun | Default automation, Pass for queue logic. Apple package/simulator `PCMPlaybackQueueTests`, `PCMPlayerQueueRegressionTests` and `PCMPlaybackLifetimeTests`; limited portable core also passed. | Physical continuity, buffer playback and audible underrun recovery remain Pending. Queue callbacks do not measure speaker output. |
+| Mic off until EOF plus drain, either completion order, exactly-once resume | Default automation, Pass for controller/fake-player logic. `ResponseLifecycleTests`, including independently gated sequential turns, drain-before-EOF, short reply and stale-callback cases, passed in Apple package/simulator. | Three untouched real turns, retained real-agent context and microphone/speaker interaction remain Pending. |
+| End before done disconnects; End after done keeps Ready; background/disconnect/interruption stop and ignore stale work | Default automation, Pass for injected controller/lifetime behavior. Corresponding `ResponseLifecycleTests` and lifetime cases passed. Mac package also passed all 8 live `WebSocketTransportTests`, including receive/heartbeat during gated playback. | Both physical End rows, background, Disconnect and real interruption/configuration change remain Pending. Simulator omits macOS-only live WebSocket tests. |
+| Actual engine scheduling/drain/stop/restart and interruption observer | Optional runnable checks. Current default Mac package skips 2 runtime tests; simulator skips 3. No fresh optional Pass. | Historical actual macOS engine Pass is preserved at its original revision. Historical opt-in simulator audio-initialization **Fail** remains unresolved; notification wiring and real iOS interruption/configuration remain Pending. |
+| Pinned real Kokoro, system voice, real Mac agent integration | Optional runnable checks. Current real-sidecar, system-voice and real Ollama checks Pending, not run in this refresh. | Historical Linux sidecar timing and Mac system-voice Pass retain their original provenance. No available authorized local Apple/real-agent session was used; no service was started or changed. |
+| Privacy / physical diagnostics | Owner/device check, Pending. This documentation review adds no transcript, PCM, response-body capture or production logging. | Actual owner session still needs content-free diagnostics and recorded provenance. No new physical results were supplied. |
+
+The earlier Mac upstream cancellation result remains **Fail**, including all five assertions described above. The opt-in simulator RPC timeout remains **Fail**. Neither was rerun on its affected platform here. No assertions, timeouts, application behavior or checks changed. Optional unrun checks are Pending; skips are not fixes. The earlier Linux Combine failure remains a historical platform limitation, not an Apple failure.
+
+#### Reduced owner work
+
+Do not repeat passing default builds just to fill this record. Resolve and rerun the Mac upstream-cancellation failure in separately authorized development work before Slice 4 acceptance; reproduce the opt-in simulator engine failure separately. The default script is not a replacement for either rerun. The remaining owner session uses the full physical table below, grouped here without dropping any row:
+
+1. Record device/environment/revision provenance and privacy checks. Use real Ollama, pinned localhost-only Kokoro v0.10.0 and `af_heart`, with development services in Rex. No new service or other-machine change was authorized or made in this refresh.
+2. Observe early audible playback before genuine source EOF, startup delay, three untouched context-retaining turns and continuous ordered audio. Use the common-clock/causal-order method below; no silent-buffer or wire-chunk substitute.
+3. Exercise both End windows, temporary underrun with an explicitly test-only debug gate, and separate sidecar/server failures. If the physical delayed-source setup is unavailable, keep that row Pending and request assistance rather than treating the unit fixture as a phone mode.
+4. Exercise background, Disconnect, real interruption and route/configuration change. Confirm audio/capture stop and no stale callback or automatic restart. Report each original row as Pass/Fail/Pending, without transcripts or recordings.
+
+All eleven physical rows remain Pending. This evidence refresh can complete independently of Slice 4 acceptance. Epic #38's automation/documentation criteria can be satisfied without a physical pass; its coordinator must verify the merged refresh and the linked #30 progress comment before closing that epic.
+
 ### Owner handoff: Mac and iPhone
 
 The agent has now performed the available Mac builds and tests above. The remaining owner session is for the physical rows, after the cancellation failure is resolved; the commands below are retained for reproduction, not a request to repeat passing builds. Owner participation is required in this T3 thread. Do not mark #30 or epic #25 complete from the Linux results. Record owner-reported checks explicitly as **owner-reported**, with date, tested SHA, dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, Ollama model, image digest and voice. Leave every unrun or inconclusive row Pending. Mac checkout updates and tests above were performed only after the owner explicitly authorized SSH. Pre-existing services were preserved.
