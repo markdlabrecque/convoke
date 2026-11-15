@@ -1,4 +1,6 @@
-# iPhone spoken echo
+# Convoke iPhone app
+
+Use the [glossary](../../GLOSSARY.md) and [domain model](../../docs/domain-model.md) for the distinction between sessions, conversations, utterances and turns. A conversation is one hands-free interaction within a session; stopping and starting can retain the session's earlier context.
 
 Open `Convoke.xcodeproj` and use the shared `Convoke` scheme. The app supports iPhone on iOS 26+. There are no external package dependencies. The local `ConvokeCore` package contains the session controller and its tests.
 
