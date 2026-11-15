@@ -2,6 +2,8 @@
 
 The server sends each spoken turn to an OpenAI-compatible chat endpoint and speaks the complete reply through Kokoro when configured, or the macOS voice otherwise. The setup and verification guide is [`docs/development.md`](../docs/development.md).
 
+For project language, see the [glossary](../GLOSSARY.md) and [domain model](../docs/domain-model.md). The server's `Conversation` class represents a session and its shared history, not one Start-to-End hands-free conversation.
+
 ## Run
 
 Use a Mac running macOS 13 or later with Swift 6.4 or later, plus either the Docker Kokoro sidecar below or an installed system speech voice. The committed dependency resolution currently requires Swift 6.4.
