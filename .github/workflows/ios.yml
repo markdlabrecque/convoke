@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'ios/**'
+      - 'protocol/**'
       - '.github/workflows/ios.yml'
   push:
     branches: [main]
     paths:
       - 'ios/**'
+      - 'protocol/**'
       - '.github/workflows/ios.yml'
 
 permissions:
@@ -17,14 +19,39 @@ permissions:
 jobs:
   capture:
     runs-on: macos-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Test session controller without microphone or server
-        working-directory: ios/Convoke
-        run: swift test
-      - name: Build app and iOS test target without signing
-        run: >-
-          xcodebuild -project ios/Convoke/Convoke.xcodeproj
-          -scheme Convoke -sdk iphonesimulator
-          -destination 'generic/platform=iOS Simulator'
-          CODE_SIGNING_ALLOWED=NO build-for-testing
+      - name: Validate script failure propagation with fake tools
+        run: ios/Convoke/scripts/test-apple-driver.sh
+      - name: Validate invalid simulator override
+        env:
+          APPLE_TEST_OUTPUT_DIR: ${{ runner.temp }}/convoke-apple-results
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set +e
+          SIMULATOR_UDID=not-a-valid-udid "$GITHUB_WORKSPACE/ios/Convoke/scripts/test-apple.sh" > invalid-simulator.log 2>&1
+          status=$?
+          set -e
+          cat invalid-simulator.log
+          test "$status" -ne 0
+          grep -q 'SIMULATOR_UDID is invalid/unavailable' invalid-simulator.log
+      - name: Run shared Apple checks from outside the repository
+        env:
+          APPLE_TEST_OUTPUT_DIR: ${{ runner.temp }}/convoke-apple-results
+        working-directory: ${{ runner.temp }}
+        run: '"$GITHUB_WORKSPACE/ios/Convoke/scripts/test-apple.sh"'
+      - name: Preserve Apple logs and result bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-results-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/invalid-simulator.log
+            ${{ runner.temp }}/convoke-apple-results/**/*.log
+            ${{ runner.temp }}/convoke-apple-results/**/*.json
+            ${{ runner.temp }}/convoke-apple-results/**/*.txt
+            ${{ runner.temp }}/convoke-apple-results/**/*.xcresult
