@@ -1,0 +1,53 @@
+name: Swift Linux
+
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'ios/**'
+      - 'protocol/**'
+      - '.github/workflows/swift-linux.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'ios/**'
+      - 'protocol/**'
+      - '.github/workflows/swift-linux.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server build and tests (Linux)
+    runs-on: ubuntu-24.04
+    container: swift:6.4.2-noble
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record revision and Swift toolchain
+        run: |
+          git rev-parse HEAD
+          swift --version
+      - name: Build server
+        run: swift build --package-path server
+      - name: Test server (optional real Kokoro smoke skipped)
+        # No sidecar is started. The suite reports its opt-in Kokoro smoke as
+        # skipped; the macOS-only system voice test is not compiled on Linux.
+        run: swift test --package-path server
+
+  portable-core:
+    name: Limited portable core (Combine stand-in)
+    runs-on: ubuntu-24.04
+    container: swift:6.4.2-noble
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record revision and Swift toolchain
+        run: |
+          git rev-parse HEAD
+          swift --version
+      - name: Test limited core with test-only Combine stand-in
+        # Not real Combine, Apple adapters, simulator or physical audio tests.
+        run: bash ios/Convoke/scripts/test-portable-core.sh

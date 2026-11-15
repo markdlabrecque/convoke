@@ -262,9 +262,8 @@ final class ConversationTests: XCTestCase {
         do {
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
-            let session = URLSession(configuration: .ephemeral)
-            defer { session.invalidateAndCancel(); feed.finish() }
-            let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+            defer { feed.finish() }
+            let socket = try await TestWebSocket.connect(to: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
             let wire = try await WireClient.connect(socket)
             let watchdog = Task {
                 try await Task.sleep(nanoseconds: 20_000_000_000)
@@ -682,7 +681,7 @@ final class ConversationTests: XCTestCase {
         try ConversationProtocol.userText(from: userText(text))
     }
 
-    private func receive(_ socket: URLSessionWebSocketTask) async throws -> [String: Any] {
+    private func receive(_ socket: TestWebSocket) async throws -> [String: Any] {
         guard case .string(let text) = try await socket.receive() else {
             throw ConversationError.invalidMessage
         }
@@ -690,7 +689,7 @@ final class ConversationTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
-    private func assertClosed(_ socket: URLSessionWebSocketTask, file: StaticString = #filePath, line: UInt = #line) async {
+    private func assertClosed(_ socket: TestWebSocket, file: StaticString = #filePath, line: UInt = #line) async {
         do {
             _ = try await socket.receive()
             XCTFail("Expected connection closure, not another frame", file: file, line: line)
@@ -704,15 +703,14 @@ final class ConversationTests: XCTestCase {
         agent: any Agent = EchoTestAgent(),
         synthesize: Conversation.Synthesize? = nil,
         stream: Conversation.SynthesizeStream? = nil,
-        body: (URLSessionWebSocketTask) async throws -> Void
+        body: (TestWebSocket) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)
         do {
             try configure(app, turnTimeout: timeout, synthesize: synthesize, stream: stream, agent: agent)
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
-            let session = URLSession(configuration: .ephemeral)
-            let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+            let socket = try await TestWebSocket.connect(to: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
             let watchdog = Task {
                 try await Task.sleep(nanoseconds: 20_000_000_000)
                 socket.cancel(with: .goingAway, reason: nil)
@@ -720,9 +718,7 @@ final class ConversationTests: XCTestCase {
             defer {
                 watchdog.cancel()
                 socket.cancel(with: .goingAway, reason: nil)
-                session.invalidateAndCancel()
             }
-            socket.resume()
             try await body(socket)
             socket.cancel(with: .goingAway, reason: nil)
             await app.server.shutdown()
@@ -746,7 +742,7 @@ private final class WireClient {
         self.frames = frames
     }
 
-    static func connect(_ peer: URLSessionWebSocketTask) async throws -> WireClient {
+    static func connect(_ peer: TestWebSocket) async throws -> WireClient {
         let url = peer.originalRequest!.url!.absoluteString.replacingOccurrences(of: "http://", with: "ws://")
         let (stream, continuation) = AsyncStream<[String: Any]>.makeStream()
         let socket: WebSocket = try await withCheckedThrowingContinuation { opened in

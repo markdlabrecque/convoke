@@ -72,10 +72,9 @@ final class ConnectionLifecycleTests: XCTestCase {
             do {
                 try await app.server.start(address: .hostname("127.0.0.1", port: 0))
                 let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
-                let session = URLSession(configuration: .ephemeral)
-                defer { session.invalidateAndCancel(); feed.finish() }
-                let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
-                socket.resume()
+                defer { feed.finish() }
+                let socket = try await TestWebSocket.connect(to: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+                defer { socket.cancel(with: .goingAway, reason: nil) }
                 let watchdog = Task {
                     try await Task.sleep(nanoseconds: 15_000_000_000)
                     socket.cancel(with: .goingAway, reason: nil)
