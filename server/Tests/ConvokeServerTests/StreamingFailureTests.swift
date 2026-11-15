@@ -109,10 +109,8 @@ final class StreamingFailureTests: XCTestCase {
         do {
             try await app.server.start(address: .hostname("127.0.0.1", port: 0))
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
-            let session = URLSession(configuration: .ephemeral)
-            defer { session.invalidateAndCancel() }
-            let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
-            socket.resume()
+            let socket = try await TestWebSocket.connect(to: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+            defer { socket.cancel(with: .goingAway, reason: nil) }
             try await socket.send(.string("{\"type\":\"user.text\",\"text\":\"fixture\"}"))
             _ = try await socket.receive() // text
             _ = try await socket.receive() // audio
@@ -150,10 +148,8 @@ final class StreamingFailureTests: XCTestCase {
                                   stream: { try await synthesizer.stream($0) }, agent: EchoTestAgent())
                     try await app.server.start(address: .hostname("127.0.0.1", port: 0))
                     let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
-                    let session = URLSession(configuration: .ephemeral)
-                    defer { session.invalidateAndCancel() }
-                    let socket = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
-                    socket.resume()
+                    let socket = try await TestWebSocket.connect(to: URL(string: "ws://127.0.0.1:\(port)/conversation")!)
+                    defer { socket.cancel(with: .goingAway, reason: nil) }
                     try await socket.send(.string("{\"type\":\"user.text\",\"text\":\"fixture\"}"))
                     _ = try await socket.receive()
                     _ = try await socket.receive()
