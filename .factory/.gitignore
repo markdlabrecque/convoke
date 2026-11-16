@@ -3,3 +3,5 @@ evidence/
 state/
 logs/
 board.html
+worktrees/
+node_modules/

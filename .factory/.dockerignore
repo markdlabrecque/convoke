@@ -1,0 +1,4 @@
+# The image needs only its Dockerfile, never credentials or run artifacts.
+**
+!Dockerfile
+!.dockerignore
