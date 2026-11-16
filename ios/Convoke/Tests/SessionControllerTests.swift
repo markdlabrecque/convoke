@@ -224,7 +224,7 @@ final class SessionControllerTests: XCTestCase {
         transport.holdConnect = true
         let held = expectation(description: "transport connect callback is held")
         transport.onConnectHeld = { held.fulfill() }
-        let connecting = Task { await session.connect() }
+        let connecting = AsyncTestGate.Operation { await self.session.connect() }
         defer { connecting.cancel() }
         guard await XCTWaiter.fulfillment(of: [held], timeout: 2) == .completed else {
             XCTFail("Timed out waiting for transport connect callback to be held")
@@ -240,7 +240,7 @@ final class SessionControllerTests: XCTestCase {
         session.disconnect()
         transport.pendingConnect?.resume()
         transport.pendingConnect = nil
-        try await AsyncTestGate.join(connecting, named: "stale connect returned")
+        try await connecting.join(named: "stale connect returned")
         XCTAssertEqual(session.state, .disconnected)
     }
 
@@ -248,7 +248,7 @@ final class SessionControllerTests: XCTestCase {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startCapture() }
+        let starting = AsyncTestGate.Operation { await self.session.startCapture() }
         defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "speech start callback held")
         await session.submitCapture()
@@ -256,7 +256,7 @@ final class SessionControllerTests: XCTestCase {
         session.disconnect()
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        try await AsyncTestGate.join(starting, named: "stale permission start returned")
+        try await starting.join(named: "stale permission start returned")
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertNil(timer.action)
     }
@@ -266,7 +266,7 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         await session.startCapture()
         speech.holdFinish = true
-        let submitting = Task { await session.submitCapture() }
+        let submitting = AsyncTestGate.Operation { await self.session.submitCapture() }
         defer { submitting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "speech finish callback held")
         await session.submitCapture()
@@ -274,7 +274,7 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         speech.pendingFinish?.resume(returning: "discard me")
         speech.pendingFinish = nil
-        try await AsyncTestGate.join(submitting, named: "stale finalization returned after reconnect")
+        try await submitting.join(named: "stale finalization returned after reconnect")
         XCTAssertEqual(session.state, .ready)
         XCTAssertTrue(transport.sent.isEmpty)
     }
@@ -425,14 +425,14 @@ final class SessionControllerTests: XCTestCase {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startConversation() }
+        let starting = AsyncTestGate.Operation { await self.session.startConversation() }
         defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "model preparation callback held")
         XCTAssertEqual(session.statusText, "Preparing speech recognition")
         XCTAssertTrue(session.isPreparing)
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        try await AsyncTestGate.join(starting, named: "model preparation returned")
+        try await starting.join(named: "model preparation returned")
         XCTAssertFalse(session.isPreparing)
         XCTAssertEqual(session.statusText, "Listening")
         session.disconnect()
@@ -484,7 +484,7 @@ final class SessionControllerTests: XCTestCase {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startConversation() }
+        let starting = AsyncTestGate.Operation { await self.session.startConversation() }
         defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "preparation callback held before End")
         session.endConversation()
@@ -492,7 +492,7 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertFalse(session.isPreparing)
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        try await AsyncTestGate.join(starting, named: "preparation returned after End")
+        try await starting.join(named: "preparation returned after End")
         XCTAssertEqual(session.state, .ready)
         XCTAssertNil(timer.action)
         session.disconnect()
@@ -503,13 +503,13 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         await session.startConversation()
         speech.holdFinish = true
-        let submitting = Task { await session.submitCapture() }
+        let submitting = AsyncTestGate.Operation { await self.session.submitCapture() }
         defer { submitting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "finalization callback held before End")
         session.endConversation()
         speech.pendingFinish?.resume(returning: "discard me")
         speech.pendingFinish = nil
-        try await AsyncTestGate.join(submitting, named: "finalization returned after End")
+        try await submitting.join(named: "finalization returned after End")
         XCTAssertEqual(session.state, .ready)
         XCTAssertTrue(transport.sent.isEmpty)
         XCTAssertEqual(speech.starts, 1)

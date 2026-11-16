@@ -70,17 +70,31 @@ final class AsyncTestGate {
         }
     }
 
-    /// Unstructured controller tasks may deliberately ignore cancellation in a fake.
-    /// Never turn a failed milestone into an unbounded task.value in the test itself.
-    static func join(_ task: Task<Void, Never>, named milestone: String, timeout: UInt64 = 5_000_000_000) async throws {
-        let completed = AsyncTestGate()
-        let observer = Task { @MainActor in
-            await task.value
-            completed.signal()
+    /// The worker signals its own completion: a cancelled observer awaiting task.value
+    /// would stay suspended if a deliberately held fake callback ignores cancellation.
+    /// Tests still release those callbacks in teardown, even when a join times out.
+    @MainActor
+    struct Operation {
+        private let completed: AsyncTestGate
+        private let task: Task<Void, Never>
+
+        init(_ body: @escaping @MainActor () async -> Void) {
+            let completed = AsyncTestGate()
+            self.completed = completed
+            task = Task { @MainActor in
+                await body()
+                completed.signal()
+            }
         }
-        defer { observer.cancel() }
-        do { try await completed.wait(after: 0, named: milestone, timeout: timeout) }
-        catch { task.cancel(); throw error }
+
+        var isCancelled: Bool { task.isCancelled }
+        var waiterCount: Int { completed.waiterCount }
+        func cancel() { task.cancel() }
+
+        func join(named milestone: String, timeout: UInt64 = 5_000_000_000) async throws {
+            do { try await completed.wait(after: 0, named: milestone, timeout: timeout) }
+            catch { task.cancel(); throw error }
+        }
     }
 }
 
@@ -113,12 +127,12 @@ final class AsyncTestGateTests: XCTestCase {
     func testFailedJoinCancelsTaskWithoutUnboundedCleanup() async throws {
         let worker = AsyncTestGate()
         let finished = AsyncTestGate()
-        let task = Task {
+        let task = AsyncTestGate.Operation {
             do { try await worker.wait(after: 0, named: "worker held") } catch {}
             finished.signal()
         }
         do {
-            try await AsyncTestGate.join(task, named: "controller task returned", timeout: 0)
+            try await task.join(named: "controller task returned", timeout: 0)
             XCTFail("Expected join watchdog")
         } catch {
             XCTAssertTrue(String(describing: error).contains("controller task returned"))
@@ -126,6 +140,33 @@ final class AsyncTestGateTests: XCTestCase {
         XCTAssertTrue(task.isCancelled)
         try await finished.wait(after: 0, named: "cancelled worker cleaned up")
         XCTAssertEqual(worker.waiterCount, 0)
+    }
+
+    func testTimedOutJoinAllowsLateCancellationIgnoringCallbackAndRejoin() async throws {
+        let held = AsyncTestGate()
+        var callback: CheckedContinuation<Void, Never>?
+        let operation = AsyncTestGate.Operation {
+            await withCheckedContinuation {
+                callback = $0
+                held.signal()
+            }
+        }
+        defer { callback?.resume() }
+        try await held.wait(after: 0, named: "cancellation-ignoring callback held")
+        do {
+            try await operation.join(named: "held controller returned", timeout: 0)
+            XCTFail("Expected join watchdog")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("held controller returned"))
+        }
+        XCTAssertTrue(operation.isCancelled)
+        XCTAssertEqual(operation.waiterCount, 0)
+        callback?.resume()
+        callback = nil
+        // Completion is retained even after the first join's waiter was removed.
+        try await operation.join(named: "late controller callback returned")
+        try await operation.join(named: "already completed controller")
+        XCTAssertEqual(operation.waiterCount, 0)
     }
 
     func testExpirationAndCancellationCleanUpAndNameMilestone() async {
