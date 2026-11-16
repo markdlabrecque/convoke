@@ -25,6 +25,9 @@ RUN apt-get update \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
+# Bake reviewed, project-versioned guidance into Pi's global skill discovery path.
+COPY --chown=${AGENT_UID}:${AGENT_GID} skills/ /home/agent/.pi/agent/skills/
+
 ENV HOME=/home/agent
 USER ${AGENT_UID}:${AGENT_GID}
 WORKDIR /home/agent/workspace
