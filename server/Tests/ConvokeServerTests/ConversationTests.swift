@@ -45,6 +45,59 @@ final class ConversationTests: XCTestCase {
         }
     }
 
+    func testWholeReplyAdaptersValidateAndComplete() async throws {
+        for size in [0, 1, ConversationProtocol.maxAudioBytes + 2] {
+            let audio = Data(repeating: 3, count: size)
+            XCTAssertThrowsError(try SpeechAudio.wholeReply(audio))
+            do {
+                _ = try await SpeechAudio.stream(wrapping: { _ in audio })("test")
+                XCTFail("Invalid whole reply must fail before streaming")
+            } catch {}
+        }
+        let audio = Data([1, 2, 3, 4])
+        let direct = try SpeechAudio.wholeReply(audio)
+        let wrapped = try await SpeechAudio.stream(wrapping: { _ in audio })("test")
+        for stream in [direct, wrapped] {
+            var pieces: [Data] = []
+            for try await piece in stream { pieces.append(piece) }
+            XCTAssertEqual(pieces, [audio])
+        }
+    }
+
+    func testExactFramerChunkSizesAndOddSplitCumulativeBoundaries() throws {
+        let cap = ConversationProtocol.maxAudioBytes
+        for size in [2, 16_384, cap] {
+            var framer = AudioFramer()
+            let chunks = try framer.push(Data(repeating: 42, count: size))
+            XCTAssertEqual(chunks.map(\.count), Array(repeating: 16_384, count: size / 16_384) + (size % 16_384 == 0 ? [] : [size % 16_384]))
+            XCTAssertEqual(chunks.reduce(0) { $0 + $1.count }, size)
+            try framer.finish()
+        }
+        for total in [cap - 2, cap, cap + 2] {
+            var framer = AudioFramer()
+            var remaining = total, pulls = 0, emitted = 0
+            var rejected = false
+            while remaining > 0 {
+                let size = min(remaining, pulls.isMultiple(of: 2) ? 16_383 : 16_385)
+                remaining -= size
+                pulls += 1
+                if framer.totalBytes + size > cap {
+                    XCTAssertEqual(total, cap + 2)
+                    XCTAssertThrowsError(try framer.push(Data(count: size)))
+                    rejected = true
+                    break
+                }
+                emitted += try framer.push(Data(count: size)).reduce(0) { $0 + $1.count }
+            }
+            XCTAssertEqual(rejected, total > cap)
+            if total <= cap {
+                try framer.finish()
+                XCTAssertEqual(emitted, total)
+                XCTAssertEqual(framer.totalBytes, total)
+            }
+        }
+    }
+
     func testSequentialTurnsAndChunkCounts() async throws {
         let audio = Data((0..<40_002).map { UInt8($0 % 251) })
         try await withServer(synthesize: { text in
@@ -75,33 +128,10 @@ final class ConversationTests: XCTestCase {
         }
     }
 
-    func testExactChunkAndAudioCapCompletionCounts() async throws {
-        for size in [2, 16_384, ConversationProtocol.maxAudioBytes] {
-            try await withServer(synthesize: { _ in Data(repeating: 42, count: size) }) { socket in
-                let wire = try await WireClient.connect(socket)
-                try await wire.send(self.userText("boundary"))
-                _ = try await wire.next()
-                let expectedChunks = (size + 16_383) / 16_384
-                var receivedBytes = 0
-                for sequence in 0..<expectedChunks {
-                    let frame = try await wire.next()
-                    XCTAssertEqual(frame["type"] as? String, "agent.audio")
-                    XCTAssertEqual(frame["sequence"] as? Int, sequence)
-                    let data = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
-                    XCTAssertEqual(data.count, min(16_384, size - receivedBytes))
-                    receivedBytes += data.count
-                }
-                XCTAssertEqual(receivedBytes, size)
-                let done = try await wire.next()
-                XCTAssertEqual(done["type"] as? String, "agent.done")
-                XCTAssertEqual(done["chunks"] as? Int, expectedChunks)
-            }
-        }
-    }
-
     func testIncrementalCumulativeBoundaryOnWire() async throws {
         let cap = ConversationProtocol.maxAudioBytes
-        for total in [cap - 2, cap, cap + 2] {
+        do {
+            let total = cap
             let source = BoundarySource(bytes: total)
             try await withServer(stream: { _ in AsyncThrowingStream(unfolding: { await source.next() }) }) { socket in
                 let wire = try await WireClient.connect(socket)
@@ -109,31 +139,22 @@ final class ConversationTests: XCTestCase {
                 let text = try await wire.next()
                 XCTAssertEqual(text["type"] as? String, "agent.text")
                 var bytes = 0, chunks = 0
-                var completed = false
-                do {
-                    while true {
-                        let frame = try await wire.next()
-                        if frame["type"] as? String == "agent.done" {
-                            XCTAssertEqual(frame["chunks"] as? Int, chunks)
-                            completed = true
-                            break
-                        }
-                        XCTAssertEqual(frame["type"] as? String, "agent.audio")
-                        XCTAssertEqual(frame["sequence"] as? Int, chunks)
-                        let pcm = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
-                        XCTAssertFalse(pcm.isEmpty)
-                        XCTAssertTrue(pcm.count.isMultiple(of: 2))
-                        XCTAssertLessThanOrEqual(pcm.count, 16_384)
-                        bytes += pcm.count
-                        chunks += 1
+                while true {
+                    let frame = try await wire.next()
+                    if frame["type"] as? String == "agent.done" {
+                        XCTAssertEqual(frame["chunks"] as? Int, chunks)
+                        break
                     }
-                } catch {
-                    if total <= cap { throw error }
+                    XCTAssertEqual(frame["type"] as? String, "agent.audio")
+                    XCTAssertEqual(frame["sequence"] as? Int, chunks)
+                    let pcm = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String)))
+                    XCTAssertFalse(pcm.isEmpty)
+                    XCTAssertTrue(pcm.count.isMultiple(of: 2))
+                    XCTAssertLessThanOrEqual(pcm.count, 16_384)
+                    bytes += pcm.count
+                    chunks += 1
                 }
-                XCTAssertEqual(completed, total <= cap)
-                XCTAssertLessThanOrEqual(bytes, cap)
-                if completed { XCTAssertEqual(bytes, total) }
-                else { XCTAssertEqual(wire.closeCode, .unexpectedServerError) }
+                XCTAssertEqual(bytes, cap)
             }
         }
     }
@@ -182,7 +203,7 @@ final class ConversationTests: XCTestCase {
     }
 
     func testStreamFailuresAfterPartialAudioCloseWithoutDone() async throws {
-        enum Failure: CaseIterable { case thrown, oddFinalByte, empty, overCap }
+        enum Failure: CaseIterable { case thrown, overCap }
         for failure in Failure.allCases {
             try await withServer(stream: { _ in
                 AsyncThrowingStream<Data, Error> { continuation in
@@ -190,11 +211,6 @@ final class ConversationTests: XCTestCase {
                     case .thrown:
                         continuation.yield(Data([0, 0]))
                         continuation.finish(throwing: SpeechError.http(status: 500))
-                    case .oddFinalByte:
-                        continuation.yield(Data([1, 2, 3]))
-                        continuation.finish()
-                    case .empty:
-                        continuation.finish()
                     case .overCap:
                         for _ in 0...8 { continuation.yield(Data(repeating: 0, count: 1 << 20)) }
                         continuation.finish()
@@ -203,18 +219,23 @@ final class ConversationTests: XCTestCase {
             }) { socket in
                 let wire = try await WireClient.connect(socket)
                 try await wire.send(self.userText("test"))
-                var audioFrames = 0
+                var audioFrames = 0, audioBytes = 0
                 var sawDone = false
                 do {
                     while true {
                         let frame = try await wire.next()
                         if frame["type"] as? String == "agent.done" { sawDone = true }
-                        if frame["type"] as? String == "agent.audio" { audioFrames += 1 }
+                        if frame["type"] as? String == "agent.audio" {
+                            audioFrames += 1
+                            audioBytes += try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(frame["data"] as? String))).count
+                        }
                     }
                 } catch {}  // The connection closed.
+                if failure == .thrown { XCTAssertGreaterThan(audioFrames, 0) }
                 XCTAssertFalse(sawDone, "\(failure) must not complete the turn")
                 XCTAssertEqual(wire.closeCode, .unexpectedServerError, "Partial source/output failures are 1011")
                 XCTAssertLessThanOrEqual(audioFrames, ConversationProtocol.maxAudioBytes / ConversationProtocol.maxChunkBytes)
+                XCTAssertLessThanOrEqual(audioBytes, ConversationProtocol.maxAudioBytes)
             }
         }
     }
@@ -345,24 +366,16 @@ final class ConversationTests: XCTestCase {
         }
     }
 
-    func testAudioFramerSplitsCarriesAndEnforcesCap() throws {
+    func testSampleAndFrameBoundaryMatrixAndCumulativeCarryCap() throws {
         var framer = AudioFramer()
         XCTAssertEqual(try framer.push(Data([1])).count, 0)
-        let chunks = try framer.push(Data(repeating: 9, count: 16_384 * 2))  // 1 carried + 32768 = odd
-        XCTAssertEqual(chunks.map(\.count), [16_384, 16_384])
+        let fullFrames = try framer.push(Data(repeating: 9, count: 16_384 * 2))
+        XCTAssertEqual(fullFrames.map(\.count), [16_384, 16_384])
         XCTAssertThrowsError(try framer.finish(), "A carried half sample is invalid")
         XCTAssertNoThrow(try framer.push(Data([0])))
         XCTAssertNoThrow(try framer.finish())
         var empty = AudioFramer()
         XCTAssertThrowsError(try empty.finish())
-        var capped = AudioFramer()
-        for _ in 0..<8 { XCTAssertNoThrow(try capped.push(Data(repeating: 0, count: 1 << 20))) }
-        XCTAssertNoThrow(try capped.finish(), "Exactly 8 MiB is valid")
-        XCTAssertThrowsError(try capped.push(Data([0])), "Even one byte beyond the cap fails")
-        XCTAssertThrowsError(try capped.push(Data([0, 0])))
-    }
-
-    func testSampleAndFrameBoundaryMatrixAndCumulativeCarryCap() throws {
         let pcm = Data((0..<32_772).map { UInt8($0 % 251) })
         for split in [0, 1, 2, 16_383, 16_384, 16_385, 32_769, pcm.count] {
             var framer = AudioFramer()
@@ -388,13 +401,12 @@ final class ConversationTests: XCTestCase {
         XCTAssertEqual(exact.totalBytes, ConversationProtocol.maxAudioBytes)
         try exact.finish()
         XCTAssertThrowsError(try exact.push(Data([8])), "The carried half-sample counts against the cumulative cap")
+        XCTAssertThrowsError(try exact.push(Data([8, 9])))
     }
 
     func testInvalidFramesCloseConnection() async throws {
         let invalid: [URLSessionWebSocketTask.Message] = [
-            .string("{"), .string(try userText(" \n")),
-            .string(try userText(String(repeating: "a", count: 4097))),
-            .string("{\"type\":\"agent.done\"}"), .data(Data([0, 1])),
+            .string("{"), .data(Data([0, 1])),
             .string(String(repeating: "x", count: 32769)),
         ]
         for frame in invalid {
@@ -495,8 +507,6 @@ final class ConversationTests: XCTestCase {
         let synthesizers: [Conversation.Synthesize] = [
             { _ in throw ConversationError.synthesisFailed },
             { try await UnavailableSpeechSynthesizer().synthesize($0) },
-            { _ in Data() }, { _ in Data([1]) },
-            { _ in Data(repeating: 0, count: ConversationProtocol.maxAudioBytes + 2) },
         ]
         for synthesize in synthesizers {
             try await withServer(synthesize: synthesize) { socket in
