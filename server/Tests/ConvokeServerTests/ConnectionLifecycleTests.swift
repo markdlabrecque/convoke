@@ -151,58 +151,28 @@ final class ConnectionLifecycleTests: XCTestCase {
         }
     }
 
-    func testMaskAndReservedBitsAreRejectedBeforeAggregation() async throws {
-        // Cover invalid metadata on both initial and continuation fragments.
-        for fragmented in [false, true] {
-            for invalidContinuation in fragmented ? [false, true] : [false] {
-                for fault in 0..<4 {
-                    try await withRawServer { peer in
-                        if invalidContinuation {
-                            try peer.send(text: "{", fin: false)
-                        }
-                        try peer.send(
-                            text: invalidContinuation ? "}" : "{\"type\":\"user.text\",\"text\":\"test\"}",
-                            opcode: invalidContinuation ? 0 : 1,
-                            fin: !fragmented,
-                            masked: fault != 0,
-                            reserved: fault == 0 ? 0 : UInt8(0x80 >> fault)
-                        )
-                        let close = try peer.receiveFrame()
-                        XCTAssertEqual(close.opcode, 8, "Invalid wire metadata must not produce agent.text")
-                        XCTAssertEqual(close.payload, Data([3, 234])) // 1002
-                        XCTAssertEqual(try peer.read(upTo: 1).count, 0)
-                    }
-                }
+    func testWireUpgraderRejectsUnmaskedAndReservedContinuation() async throws {
+        // Exhaustive metadata rows live in EmbeddedConnectionFramesTests.
+        // These sentinels prove the real HTTP route installs pre-aggregation guards.
+        for unmasked in [true, false] {
+            try await withRawServer { peer in
+                try peer.send(text: "{", fin: false)
+                try peer.send(text: "}", opcode: 0, masked: !unmasked, reserved: unmasked ? 0 : 0x40)
+                let close = try peer.receiveFrame()
+                XCTAssertEqual(close.opcode, 8, "Invalid wire metadata must not produce agent.text")
+                XCTAssertEqual(close.payload, Data([3, 234])) // 1002
+                XCTAssertEqual(try peer.read(upTo: 1).count, 0)
             }
         }
     }
 
-    func testInvalidClosePayloadLengthsAndStatusCodes() async throws {
-        var payloads = [Data([1])]
-        for code: UInt16 in [0, 999, 1004, 1005, 1006, 1015, 1016, 2000, 2999, 5000, 65535] {
-            payloads.append(Data([UInt8(code >> 8), UInt8(code & 0xFF)]))
-        }
-        for payload in payloads {
-            try await assertCloseReply(to: payload, expectedCode: 1002)
-        }
-    }
-
-    func testInvalidCloseReasonUTF8() async throws {
-        for reason: [UInt8] in [[0xFF], [0xC3], [0xC0, 0xAF], [0xED, 0xA0, 0x80], [0xF4, 0x90, 0x80, 0x80]] {
-            try await assertCloseReply(to: Data([3, 232] + reason), expectedCode: 1007)
-        }
-    }
-
-    func testValidClosePayloads() async throws {
+    func testWireClosePayloadSentinels() async throws {
+        // Only installation/byte-handling sentinels, not a second payload matrix.
+        try await assertCloseReply(to: Data([3, 236]), expectedCode: 1002) // Invalid 1004.
+        try await assertCloseReply(to: Data([3, 232, 0xFF]), expectedCode: 1007)
         try await assertCloseReply(to: Data(), expectedCode: 1000)
-        for code: UInt16 in [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 3000, 3999, 4000, 4999] {
-            try await assertCloseReply(to: Data([UInt8(code >> 8), UInt8(code & 0xFF)]), expectedCode: code)
-        }
-        for reason in ["goodbye", "À bientôt 🌍", "\u{FFFD}", String(repeating: "x", count: 123)] {
-            var payload = Data([3, 232])
-            payload.append(contentsOf: reason.utf8)
-            try await assertCloseReply(to: payload, expectedCode: 1000)
-        }
+        try await assertCloseReply(to: Data([0x13, 0x87]), expectedCode: 4999)
+        try await assertCloseReply(to: Data([3, 232]) + Data("\u{FFFD}".utf8), expectedCode: 1000)
     }
 
     func testInvalidCloseAcknowledgmentDoesNotEmitAnotherClose() async throws {
