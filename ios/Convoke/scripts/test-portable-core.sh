@@ -25,7 +25,7 @@ public protocol ObservableObject: AnyObject {}
 }
 SWIFT
 cp "$root"/Core/*.swift "$check/Sources/ConvokeCore/"
-for name in SessionControllerTests ResponseTests PCMPlaybackQueueTests StreamingBoundsTests PCMPlayerTests; do
+for name in AsyncTestGate SessionControllerTests ResponseTests PCMPlaybackQueueTests StreamingBoundsTests PCMPlayerTests; do
     cp "$root/Tests/$name.swift" "$check/Tests/ConvokeCoreTests/"
 done
 printf '%s\n' 'Limited core checks with test-only Combine stand-in. Apple adapters are not exercised.'

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		490000000000000000000001 /* AsyncTestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 490000000000000000000002 /* AsyncTestGate.swift */; };
 		270000000000000000000001 /* PCMPlaybackQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270000000000000000000003 /* PCMPlaybackQueueTests.swift */; };
 		270000000000000000000002 /* StreamingBoundsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270000000000000000000004 /* StreamingBoundsTests.swift */; };
 		1632E0290685942727914045 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77F435D330DE97F5876C5F2 /* ContentView.swift */; };
@@ -27,6 +28,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		490000000000000000000002 /* AsyncTestGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncTestGate.swift; sourceTree = "<group>"; };
 		270000000000000000000003 /* PCMPlaybackQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCMPlaybackQueueTests.swift; sourceTree = "<group>"; };
 		270000000000000000000004 /* StreamingBoundsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingBoundsTests.swift; sourceTree = "<group>"; };
 		00099C33E2C80F9572039C1B /* WebSocketTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketTransportTests.swift; sourceTree = "<group>"; };
@@ -77,6 +79,7 @@
 		423D3B2732767DCD1391C081 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				490000000000000000000002 /* AsyncTestGate.swift */,
 				28F96532CCE73057002F3793 /* AppleSpeechCaptureTests.swift */,
 				B9EBFDE2409AE1BB28823E1E /* PCMPlayerTests.swift */,
 				270000000000000000000003 /* PCMPlaybackQueueTests.swift */,
@@ -219,6 +222,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D285C84853D92A5A0523D6BB /* AppleSpeechCapture.swift in Sources */,
+				490000000000000000000001 /* AsyncTestGate.swift in Sources */,
 				9B389F0F4C4EDCE35BC3CBA3 /* AppleSpeechCaptureTests.swift in Sources */,
 				7D2E78EDC0536BBE49E72021 /* PCMPlayer.swift in Sources */,
 				2098D0A9F7BA11A88742CA66 /* PCMPlayerTests.swift in Sources */,
