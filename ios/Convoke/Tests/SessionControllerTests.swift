@@ -62,6 +62,8 @@ final class SessionControllerTests: XCTestCase {
     func testConnectDisconnectAndDuplicateConnect() async {
         makeSession()
         await connect()
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertFalse(session.isConversationActive)
         await session.connect()
         XCTAssertEqual(transport.connects, 1)
         XCTAssertEqual(transport.url?.absoluteString, session.serverURL)
@@ -435,16 +437,6 @@ final class SessionControllerTests: XCTestCase {
         try await starting.join(named: "model preparation returned")
         XCTAssertFalse(session.isPreparing)
         XCTAssertEqual(session.statusText, "Listening")
-        session.disconnect()
-    }
-
-    func testConnectDoesNotStartListening() async {
-        makeSession()
-        await connect()
-        XCTAssertEqual(speech.starts, 0)
-        XCTAssertFalse(session.isConversationActive)
-        await session.startConversation()
-        XCTAssertEqual(speech.starts, 1)
         session.disconnect()
     }
 
