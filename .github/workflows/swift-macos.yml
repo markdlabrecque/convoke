@@ -1,0 +1,64 @@
+name: Swift macOS
+
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'protocol/**'
+      - '.github/workflows/swift-macos.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'protocol/**'
+      - '.github/workflows/swift-macos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server build and tests (macOS)
+    # Hosted preview image; select Xcode explicitly, not the image default.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record revision and environment
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/mac-server-results"
+          {
+            echo 'Checkout SHA:'
+            git rev-parse HEAD
+            echo 'Dirty tree (empty means clean):'
+            git status --porcelain
+            sw_vers
+            uname -m
+            xcodebuild -version
+            swift --version
+          } 2>&1 | tee "$RUNNER_TEMP/mac-server-results/environment.log"
+      - name: Build server
+        run: |
+          set -o pipefail
+          swift build --package-path server 2>&1 | tee "$RUNNER_TEMP/mac-server-results/build.log"
+      - name: Test server (optional real Kokoro and system voice skipped)
+        run: |
+          set -o pipefail
+          unset CONVOKE_TEST_KOKORO_URL CONVOKE_TEST_SYSTEM_VOICE
+          swift test --package-path server 2>&1 | tee "$RUNNER_TEMP/mac-server-results/test.log"
+      - name: Preserve available server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-server-results-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/mac-server-results/*.log
