@@ -141,8 +141,17 @@ final class ResponseLifecycleTests: XCTestCase {
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
                                     timer: DeadlineTimer(), silenceTimer: DeadlineTimer(), player: player,
                                     log: { [weak self] in self?.logs.append($0) })
-        addTeardownBlock { [session] in
-            await MainActor.run { session?.disconnect() }
+        addTeardownBlock { [session, transport, player, speech] in
+            await MainActor.run {
+                session?.disconnect()
+                transport?.onReceive = nil
+                transport?.onWaiting = nil
+                player?.onEnqueue = nil
+                player?.onEnd = nil
+                player?.onStarted = nil
+                player?.onFailure = nil
+                speech?.onStart = nil
+            }
         }
         session.serverURL = "ws://localhost:8080/conversation"
         await session.connect()
@@ -310,7 +319,7 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(player.buffers, [Data([0, 128, 255, 127])])
         session.disconnect()
         await session.connect()
-        await Task.yield()
+        await milestone("fresh receive registered after reconnect") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .ready)
         XCTAssertEqual(transport.sent.count, 2)
         session.disconnect()
@@ -327,8 +336,9 @@ final class ResponseLifecycleTests: XCTestCase {
         session.disconnect()
         await session.connect()
         await submit()
+        let completed = player.completedEnds
         old?.resume()
-        await Task.yield()
+        await milestone("stale playback completion returned to controller") { self.player.completedEnds > completed }
         XCTAssertEqual(session.state, .waiting)
         session.disconnect()
     }
@@ -367,11 +377,12 @@ final class ResponseLifecycleTests: XCTestCase {
         response()
         await waitFor(.playing)
         await milestone("playback held before End") { self.player.pending != nil }
+        let completed = player.completedEnds
         session.endConversation()
         XCTAssertEqual(session.state, .ready)
         XCTAssertEqual(transport.disconnects, 0)
         XCTAssertGreaterThan(player.stops, 0)
-        for _ in 0..<5 { await Task.yield() }
+        await milestone("cancelled playback finalizer returned after End") { self.player.completedEnds > completed }
         XCTAssertEqual(speech.starts, 1)
         XCTAssertEqual(session.state, .ready)
         session.disconnect()
@@ -533,7 +544,9 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         oldStarted?()
         oldFailure?()
+        let completed = player.completedEnds
         oldCompletion?.resume()
+        await milestone("retained completion processed after End") { self.player.completedEnds > completed }
         await milestone("new receiver waiting after stale completion") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .waiting)
         XCTAssertNil(session.errorMessage)
@@ -594,7 +607,9 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.connect()
         await session.startConversation()
         await session.submitCapture()
+        let returned = transport.completedReceives
         oldRead?.resume(returning: audioFrame(1))
+        await milestone("stale receive returned to invalidated controller") { self.transport.completedReceives > returned }
         await milestone("reconnected receiver waiting") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .waiting)
         XCTAssertEqual(player.begins, 1)
@@ -649,9 +664,12 @@ private final class ResponseTransport: ConversationTransport {
     var disconnects = 0
     var onReceive: (() -> Void)?
     var onWaiting: (() -> Void)?
+    var completedReceives = 0
     func connect(to url: URL) async throws { connects += 1 }
     func send(text: String) async throws { sent.append(text) }
     func receive() async throws -> URLSessionWebSocketTask.Message {
+        defer { completedReceives += 1; events.signal() }
+        try Task.checkCancellation()
         onReceive?()
         if !queue.isEmpty { return queue.removeFirst() }
         return try await withCheckedThrowingContinuation {
@@ -689,6 +707,7 @@ private final class ResponsePlayer: ConversationPlayer {
     var fail = false
     var holdStart = false
     var drained = false
+    var completedEnds = 0
     var onStarted: (() -> Void)?
     var onFailure: (() -> Void)?
     var onEnqueue: (() -> Void)?
@@ -708,7 +727,7 @@ private final class ResponsePlayer: ConversationPlayer {
         events.signal()
     }
     func endStream() async throws {
-        defer { events.signal() }
+        defer { completedEnds += 1; events.signal() }
         ends += 1
         onStarted?()
         onEnd?()

@@ -26,7 +26,7 @@ final class SessionControllerTests: XCTestCase {
         player = FakePlayer()
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
                                     timer: timer, silenceTimer: silence, player: player, log: { [weak self] in self?.logs.append($0) })
-        addTeardownBlock { [session, speech, transport, defaults, defaultsName] in
+        addTeardownBlock { [session, speech, transport, defaultsName] in
             await MainActor.run {
                 session?.disconnect()
                 transport?.pendingConnect?.resume()
@@ -37,7 +37,7 @@ final class SessionControllerTests: XCTestCase {
                 speech?.pendingFinish = nil
                 transport?.onConnectHeld = nil
             }
-            defaults?.removePersistentDomain(forName: defaultsName!)
+            UserDefaults(suiteName: defaultsName!)?.removePersistentDomain(forName: defaultsName!)
         }
     }
 
@@ -225,6 +225,7 @@ final class SessionControllerTests: XCTestCase {
         let held = expectation(description: "transport connect callback is held")
         transport.onConnectHeld = { held.fulfill() }
         let connecting = Task { await session.connect() }
+        defer { connecting.cancel() }
         guard await XCTWaiter.fulfillment(of: [held], timeout: 2) == .completed else {
             XCTFail("Timed out waiting for transport connect callback to be held")
             connecting.cancel()
@@ -248,6 +249,7 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         speech.holdStart = true
         let starting = Task { await session.startCapture() }
+        defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "speech start callback held")
         await session.submitCapture()
         XCTAssertTrue(transport.sent.isEmpty)
@@ -265,6 +267,7 @@ final class SessionControllerTests: XCTestCase {
         await session.startCapture()
         speech.holdFinish = true
         let submitting = Task { await session.submitCapture() }
+        defer { submitting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "speech finish callback held")
         await session.submitCapture()
         session.disconnect()
@@ -423,6 +426,7 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         speech.holdStart = true
         let starting = Task { await session.startConversation() }
+        defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "model preparation callback held")
         XCTAssertEqual(session.statusText, "Preparing speech recognition")
         XCTAssertTrue(session.isPreparing)
@@ -481,6 +485,7 @@ final class SessionControllerTests: XCTestCase {
         await connect()
         speech.holdStart = true
         let starting = Task { await session.startConversation() }
+        defer { starting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "preparation callback held before End")
         session.endConversation()
         XCTAssertEqual(session.state, .ready)
@@ -499,6 +504,7 @@ final class SessionControllerTests: XCTestCase {
         await session.startConversation()
         speech.holdFinish = true
         let submitting = Task { await session.submitCapture() }
+        defer { submitting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "finalization callback held before End")
         session.endConversation()
         speech.pendingFinish?.resume(returning: "discard me")
