@@ -1,4 +1,7 @@
-# The image needs only its Dockerfile, never credentials or run artifacts.
+# Allow only image source and explicitly reviewed skills, never credentials or run artifacts.
 **
 !Dockerfile
 !.dockerignore
+!skills/
+!skills/writing-tests/
+!skills/writing-tests/SKILL.md

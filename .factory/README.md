@@ -19,10 +19,26 @@ docker build --pull=false \
 The Dockerfile pins Swift 6.4.2 (matching Linux CI), Node 24.20.0, Pi 1.5.2 and
 Playwright 1.65.1. The upstream Swift and Node image digests are pinned too. The
 numeric image user must match the host UID/GID. `.dockerignore` excludes everything
-except image source, including `.env`, evidence, logs and worktrees. No provider
+except image source and the explicitly allowlisted `writing-tests` skill, including
+`.env`, evidence, logs and worktrees. No provider
 or tracker credentials are built into the image. OpenAI Pi receives per-run
 credentials from the existing host Pi login; standard sandboxes do not need a
 GitHub login.
+
+The image includes the reviewed snapshot at `skills/writing-tests/SKILL.md`, copied
+from the host's `~/.agents/skills/writing-tests/SKILL.md`. Pi discovers it at
+`/home/agent/.pi/agent/skills/writing-tests/SKILL.md` without host skill mounts.
+To update the guidance, refresh that snapshot, review the diff and rebuild the image.
+Only this skill is allowlisted in `.dockerignore`; adding another requires explicit
+review of its build-context inclusion.
+
+On 2026-11-16 the skill-enabled image passed an offline, non-root check using Pi's
+skill loader: discovery, prompt advertisement, readable content and no diagnostics.
+An offline Chromium launch/DOM/cleanup smoke check also passed. Logs are in
+`.factory/logs/image-writing-tests-{build,smoke}.log`. These image checks do not
+claim ticket completion or a rerun of application tests. The rebuilt image is tagged
+`sandcastle-convoke-server:latest`; `sandcastle-convoke-server:before-writing-tests`
+retains the preceding image for rollback. Existing containers are unchanged.
 
 This replaces the temporary local-only `Dockerfile.permissions` compatibility
 layer. The image can now be built without any prior Convoke image.
