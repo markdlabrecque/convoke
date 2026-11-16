@@ -48,10 +48,12 @@ jobs:
       - name: Build server
         run: |
           set -o pipefail
+          trap 'status=$?; echo "Build exit code: $status" | tee -a "$RUNNER_TEMP/mac-server-results/build.log"; exit "$status"' EXIT
           swift build --package-path server 2>&1 | tee "$RUNNER_TEMP/mac-server-results/build.log"
       - name: Test server (optional real Kokoro and system voice skipped)
         run: |
           set -o pipefail
+          trap 'status=$?; echo "Test exit code: $status" | tee -a "$RUNNER_TEMP/mac-server-results/test.log"; exit "$status"' EXIT
           unset CONVOKE_TEST_KOKORO_URL CONVOKE_TEST_SYSTEM_VOICE
           swift test --package-path server 2>&1 | tee "$RUNNER_TEMP/mac-server-results/test.log"
       - name: Preserve available server logs
