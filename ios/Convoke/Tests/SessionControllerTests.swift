@@ -26,8 +26,18 @@ final class SessionControllerTests: XCTestCase {
         player = FakePlayer()
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
                                     timer: timer, silenceTimer: silence, player: player, log: { [weak self] in self?.logs.append($0) })
-        addTeardownBlock { [defaults, defaultsName] in
-            defaults?.removePersistentDomain(forName: defaultsName!)
+        addTeardownBlock { [session, speech, transport, defaultsName] in
+            await MainActor.run {
+                session?.disconnect()
+                transport?.pendingConnect?.resume()
+                transport?.pendingConnect = nil
+                speech?.pendingStart?.resume()
+                speech?.pendingStart = nil
+                speech?.pendingFinish?.resume(returning: "")
+                speech?.pendingFinish = nil
+                transport?.onConnectHeld = nil
+            }
+            UserDefaults(suiteName: defaultsName!)?.removePersistentDomain(forName: defaultsName!)
         }
     }
 
@@ -208,51 +218,63 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
     }
 
-    func testDisconnectDuringConnectIgnoresLateSuccess() async {
+    func testDisconnectDuringConnectIgnoresLateSuccess() async throws {
         makeSession()
         session.serverURL = "ws://localhost:8080/conversation"
         transport.holdConnect = true
-        let connecting = Task { await session.connect() }
-        while transport.pendingConnect == nil { await Task.yield() }
+        let held = expectation(description: "transport connect callback is held")
+        transport.onConnectHeld = { held.fulfill() }
+        let connecting = AsyncTestGate.Operation { await self.session.connect() }
+        defer { connecting.cancel() }
+        guard await XCTWaiter.fulfillment(of: [held], timeout: 2) == .completed else {
+            XCTFail("Timed out waiting for transport connect callback to be held")
+            connecting.cancel()
+            session.disconnect()
+            transport.pendingConnect?.resume()
+            transport.pendingConnect = nil
+            return
+        }
         XCTAssertEqual(session.state, .connecting)
         await session.startCapture()
         XCTAssertEqual(speech.starts, 0)
         session.disconnect()
         transport.pendingConnect?.resume()
         transport.pendingConnect = nil
-        await connecting.value
+        try await connecting.join(named: "stale connect returned")
         XCTAssertEqual(session.state, .disconnected)
     }
 
-    func testDisconnectDuringPermissionRequestIgnoresLateStart() async {
+    func testDisconnectDuringPermissionRequestIgnoresLateStart() async throws {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startCapture() }
-        while speech.pendingStart == nil { await Task.yield() }
+        let starting = AsyncTestGate.Operation { await self.session.startCapture() }
+        defer { starting.cancel() }
+        try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "speech start callback held")
         await session.submitCapture()
         XCTAssertTrue(transport.sent.isEmpty)
         session.disconnect()
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        await starting.value
+        try await starting.join(named: "stale permission start returned")
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertNil(timer.action)
     }
 
-    func testDisconnectDuringFinalizationDoesNotSendLateTranscript() async {
+    func testDisconnectDuringFinalizationDoesNotSendLateTranscript() async throws {
         makeSession()
         await connect()
         await session.startCapture()
         speech.holdFinish = true
-        let submitting = Task { await session.submitCapture() }
-        while speech.pendingFinish == nil { await Task.yield() }
+        let submitting = AsyncTestGate.Operation { await self.session.submitCapture() }
+        defer { submitting.cancel() }
+        try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "speech finish callback held")
         await session.submitCapture()
         session.disconnect()
         await connect()
         speech.pendingFinish?.resume(returning: "discard me")
         speech.pendingFinish = nil
-        await submitting.value
+        try await submitting.join(named: "stale finalization returned after reconnect")
         XCTAssertEqual(session.state, .ready)
         XCTAssertTrue(transport.sent.isEmpty)
     }
@@ -352,14 +374,14 @@ final class SessionControllerTests: XCTestCase {
         session.disconnect()
     }
 
-    func testCaptureLimitWithoutSpeechKeepsListeningInActiveConversation() async {
+    func testCaptureLimitWithoutSpeechKeepsListeningInActiveConversation() async throws {
         makeSession()
         await connect()
         speech.text = "  "
         await session.startConversation()
         XCTAssertEqual(speech.starts, 1)
         timer.fire()
-        while speech.starts < 2 { await Task.yield() }
+        try await speech.events.wait(until: { self.speech.starts >= 2 }, named: "listening restarted after empty capture")
         XCTAssertEqual(session.state, .recording)
         XCTAssertTrue(session.isConversationActive)
         XCTAssertTrue(transport.sent.isEmpty)
@@ -399,17 +421,18 @@ final class SessionControllerTests: XCTestCase {
         session.disconnect()
     }
 
-    func testPreparationIsVisibleWhileModelIsPrepared() async {
+    func testPreparationIsVisibleWhileModelIsPrepared() async throws {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startConversation() }
-        while speech.pendingStart == nil { await Task.yield() }
+        let starting = AsyncTestGate.Operation { await self.session.startConversation() }
+        defer { starting.cancel() }
+        try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "model preparation callback held")
         XCTAssertEqual(session.statusText, "Preparing speech recognition")
         XCTAssertTrue(session.isPreparing)
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        await starting.value
+        try await starting.join(named: "model preparation returned")
         XCTAssertFalse(session.isPreparing)
         XCTAssertEqual(session.statusText, "Listening")
         session.disconnect()
@@ -457,34 +480,36 @@ final class SessionControllerTests: XCTestCase {
         session.disconnect()
     }
 
-    func testEndConversationDuringPreparationIgnoresLateStart() async {
+    func testEndConversationDuringPreparationIgnoresLateStart() async throws {
         makeSession()
         await connect()
         speech.holdStart = true
-        let starting = Task { await session.startConversation() }
-        while speech.pendingStart == nil { await Task.yield() }
+        let starting = AsyncTestGate.Operation { await self.session.startConversation() }
+        defer { starting.cancel() }
+        try await speech.events.wait(until: { self.speech.pendingStart != nil }, named: "preparation callback held before End")
         session.endConversation()
         XCTAssertEqual(session.state, .ready)
         XCTAssertFalse(session.isPreparing)
         speech.pendingStart?.resume()
         speech.pendingStart = nil
-        await starting.value
+        try await starting.join(named: "preparation returned after End")
         XCTAssertEqual(session.state, .ready)
         XCTAssertNil(timer.action)
         session.disconnect()
     }
 
-    func testEndConversationDuringFinalizationDoesNotSendLateTranscript() async {
+    func testEndConversationDuringFinalizationDoesNotSendLateTranscript() async throws {
         makeSession()
         await connect()
         await session.startConversation()
         speech.holdFinish = true
-        let submitting = Task { await session.submitCapture() }
-        while speech.pendingFinish == nil { await Task.yield() }
+        let submitting = AsyncTestGate.Operation { await self.session.submitCapture() }
+        defer { submitting.cancel() }
+        try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "finalization callback held before End")
         session.endConversation()
         speech.pendingFinish?.resume(returning: "discard me")
         speech.pendingFinish = nil
-        await submitting.value
+        try await submitting.join(named: "finalization returned after End")
         XCTAssertEqual(session.state, .ready)
         XCTAssertTrue(transport.sent.isEmpty)
         XCTAssertEqual(speech.starts, 1)
@@ -523,12 +548,19 @@ private final class FakeTransport: ConversationTransport {
     var connectError: Error?
     var sendError: Error?
     var holdConnect = false
+    var onConnectHeld: (() -> Void)?
     var pendingConnect: CheckedContinuation<Void, Never>?
     func connect(to url: URL) async throws {
         connects += 1
         self.url = url
         if let connectError { throw connectError }
-        if holdConnect { await withCheckedContinuation { pendingConnect = $0 } }
+        if holdConnect {
+            guard !Task.isCancelled else { throw CancellationError() }
+            await withCheckedContinuation {
+                pendingConnect = $0
+                onConnectHeld?()
+            }
+        }
     }
     func receive() async throws -> URLSessionWebSocketTask.Message {
         try await Task.sleep(nanoseconds: UInt64.max)
@@ -544,6 +576,7 @@ private final class FakeTransport: ConversationTransport {
 
 @MainActor
 private final class FakeSpeech: SpeechCapture {
+    let events = AsyncTestGate()
     var starts = 0
     var cancels = 0
     var text = "hello"
@@ -560,13 +593,26 @@ private final class FakeSpeech: SpeechCapture {
         self.onSpeech = onSpeech
         self.onFailure = onFailure
         if let startError { throw startError }
-        if holdStart { await withCheckedContinuation { pendingStart = $0 } }
+        guard !Task.isCancelled else { throw CancellationError() }
+        if holdStart {
+            await withCheckedContinuation {
+                pendingStart = $0
+                events.signal()
+            }
+        }
+        events.signal()
     }
     var finishes = 0
     func finish() async throws -> String {
         finishes += 1
         if let finishError { throw finishError }
-        if holdFinish { return await withCheckedContinuation { pendingFinish = $0 } }
+        guard !Task.isCancelled else { throw CancellationError() }
+        if holdFinish {
+            return await withCheckedContinuation {
+                pendingFinish = $0
+                events.signal()
+            }
+        }
         return text
     }
     func cancel() { cancels += 1 }

@@ -127,24 +127,47 @@ final class ResponseLifecycleTests: XCTestCase {
     private var speech: ResponseSpeech!
     private var session: SessionController!
     private var logs: [String] = []
+    private var events = AsyncTestGate()
 
     private func setup() async {
-        transport = ResponseTransport()
-        player = ResponsePlayer()
-        speech = ResponseSpeech()
+        session?.disconnect()
+        events = AsyncTestGate()
+        transport = ResponseTransport(events: events)
+        player = ResponsePlayer(events: events)
+        speech = ResponseSpeech(events: events)
         let name = "ResponseTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
         session = SessionController(defaults: defaults, transport: transport, recognition: speech,
                                     timer: DeadlineTimer(), silenceTimer: DeadlineTimer(), player: player,
                                     log: { [weak self] in self?.logs.append($0) })
+        addTeardownBlock { [session, transport, player, speech] in
+            await MainActor.run {
+                session?.disconnect()
+                transport?.onReceive = nil
+                transport?.onWaiting = nil
+                player?.onEnqueue = nil
+                player?.onEnd = nil
+                player?.onStarted = nil
+                player?.onFailure = nil
+                speech?.onStart = nil
+            }
+        }
         session.serverURL = "ws://localhost:8080/conversation"
         await session.connect()
     }
 
+    private func milestone(_ name: String, file: StaticString = #filePath, line: UInt = #line,
+                           until predicate: () -> Bool) async {
+        do { try await events.wait(until: predicate, named: name) }
+        catch {
+            XCTFail(String(describing: error), file: file, line: line)
+            session.disconnect()
+        }
+    }
+
     private func waitFor(_ state: SessionController.State, file: StaticString = #filePath, line: UInt = #line) async {
-        let deadline = Date().addingTimeInterval(2)
-        while session.state != state && Date() < deadline { await Task.yield() }
+        await milestone("controller processed transition to \(state)", file: file, line: line) { self.session.state == state }
         XCTAssertEqual(session.state, state, file: file, line: line)
     }
 
@@ -168,7 +191,7 @@ final class ResponseLifecycleTests: XCTestCase {
             XCTAssertEqual(speech.starts, turn)
             response()
             await waitFor(.playing)
-            while player.pending == nil { await Task.yield() }
+            await milestone("EOF finalizer holds playback drain") { self.player.pending != nil }
             XCTAssertEqual(player.buffers.last, Data([0, 128, 255, 127]))
             await session.startCapture()
             XCTAssertEqual(speech.starts, turn)
@@ -195,13 +218,13 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(player.buffers, [Data([0, 128, 255, 127])])
         XCTAssertEqual(player.ends, 0, "The reply is not complete yet")
         transport.push(audioFrame(1, "AAA="))
-        while player.buffers.count < 2 { await Task.yield() }
+        await milestone("second chunk enqueued") { self.player.buffers.count >= 2 }
         XCTAssertEqual(player.begins, 1, "Later chunks queue on the same stream")
         XCTAssertEqual(player.buffers.last, Data([0, 0]))
         XCTAssertEqual(session.state, .playing)
         XCTAssertEqual(speech.starts, 1, "Microphone stays off while the reply streams")
         transport.push(.string(#"{"type":"agent.done","chunks":2}"#))
-        while player.pending == nil { await Task.yield() }
+        await milestone("validated EOF waiting for final drain") { self.player.pending != nil }
         XCTAssertEqual(session.state, .playing, "Still playing until the last chunk has played")
         XCTAssertEqual(speech.starts, 1)
         player.finish()
@@ -281,7 +304,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await submit()
         transport.push(.string(#"{"type":"agent.text","text":"old"}"#))
         transport.push(.string(#"{"type":"agent.audio","sequence":0,"data":"AAA="}"#))
-        while !transport.queue.isEmpty { await Task.yield() }
+        await milestone("partial response processed and next receive held") { self.transport.queue.isEmpty && self.transport.pending != nil }
         transport.onDisconnect?()
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertTrue(transport.queue.isEmpty)
@@ -292,11 +315,11 @@ final class ResponseLifecycleTests: XCTestCase {
         await submit()
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("fresh reply awaiting drain") { self.player.pending != nil }
         XCTAssertEqual(player.buffers, [Data([0, 128, 255, 127])])
         session.disconnect()
         await session.connect()
-        await Task.yield()
+        await milestone("fresh receive registered after reconnect") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .ready)
         XCTAssertEqual(transport.sent.count, 2)
         session.disconnect()
@@ -307,14 +330,15 @@ final class ResponseLifecycleTests: XCTestCase {
         await submit()
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("old playback callback held") { self.player.pending != nil }
         let old = player.pending
         player.pending = nil
         session.disconnect()
         await session.connect()
         await submit()
+        let completed = player.completedEnds
         old?.resume()
-        await Task.yield()
+        await milestone("stale playback completion returned to controller") { self.player.completedEnds > completed }
         XCTAssertEqual(session.state, .waiting)
         session.disconnect()
     }
@@ -327,7 +351,7 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(session.state, .waiting)
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("first automatic reply awaiting drain") { self.player.pending != nil }
         XCTAssertEqual(speech.starts, 1, "No listening while the reply plays")
         player.finish()
         await waitFor(.recording)
@@ -337,7 +361,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("second automatic reply awaiting drain") { self.player.pending != nil }
         player.finish()
         await waitFor(.recording)
         XCTAssertEqual(speech.starts, 3)
@@ -352,12 +376,13 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("playback held before End") { self.player.pending != nil }
+        let completed = player.completedEnds
         session.endConversation()
         XCTAssertEqual(session.state, .ready)
         XCTAssertEqual(transport.disconnects, 0)
         XCTAssertGreaterThan(player.stops, 0)
-        for _ in 0..<5 { await Task.yield() }
+        await milestone("cancelled playback finalizer returned after End") { self.player.completedEnds > completed }
         XCTAssertEqual(speech.starts, 1)
         XCTAssertEqual(session.state, .ready)
         session.disconnect()
@@ -379,8 +404,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         transport.push(.string(#"{"type":"agent.text","text":"x"}"#))
         transport.push(audioFrame(0))
-        let deadline = Date().addingTimeInterval(2)
-        while player.buffers.isEmpty && Date() < deadline { await Task.yield() }
+        await milestone("first reply chunk processed") { !self.player.buffers.isEmpty }
         XCTAssertEqual(player.buffers.count, 1)
     }
 
@@ -464,7 +488,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await beginReply()
         player.finish()
         // A read barrier proves the receiver is waiting for EOF while the queue is empty.
-        while transport.pending == nil { await Task.yield() }
+        await milestone("receiver waiting for EOF after underrun") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .playing)
         XCTAssertEqual(speech.starts, 1)
         transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
@@ -479,11 +503,11 @@ final class ResponseLifecycleTests: XCTestCase {
         await beginReply()
         player.finish()
         transport.push(audioFrame(1))
-        while player.buffers.count < 2 { await Task.yield() }
+        await milestone("second chunk after underrun enqueued") { self.player.buffers.count >= 2 }
         XCTAssertEqual(speech.starts, 1)
         XCTAssertEqual(player.begins, 1)
         transport.push(.string(#"{"type":"agent.done","chunks":2}"#))
-        while player.pending == nil { await Task.yield() }
+        await milestone("underrun reply awaiting drain") { self.player.pending != nil }
         XCTAssertEqual(speech.starts, 1)
         player.finish()
         await waitFor(.recording)
@@ -509,7 +533,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await setup()
         await beginReply()
         transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
-        while player.pending == nil { await Task.yield() }
+        await milestone("stale playback completion retained") { self.player.pending != nil }
         let oldStarted = player.onStarted
         let oldFailure = player.onFailure
         let oldCompletion = player.pending
@@ -520,14 +544,16 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         oldStarted?()
         oldFailure?()
+        let completed = player.completedEnds
         oldCompletion?.resume()
-        while transport.pending == nil { await Task.yield() }
+        await milestone("retained completion processed after End") { self.player.completedEnds > completed }
+        await milestone("new receiver waiting after stale completion") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .waiting)
         XCTAssertNil(session.errorMessage)
         XCTAssertEqual(speech.starts, 2)
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("new same-connection reply awaiting drain") { self.player.pending != nil }
         player.finish()
         await waitFor(.recording)
         XCTAssertEqual(speech.starts, 3)
@@ -550,7 +576,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await session.submitCapture()
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("only new reply finalizer awaiting drain") { self.player.pending != nil }
         XCTAssertEqual(player.ends, 1, "Only the new reply may call endStream")
         player.finish()
         await waitFor(.recording)
@@ -562,7 +588,7 @@ final class ResponseLifecycleTests: XCTestCase {
         await setup()
         await beginReply()
         transport.push(.string(#"{"type":"agent.done","chunks":1}"#))
-        while player.pending == nil { await Task.yield() }
+        await milestone("EOF playback pending before interruption") { self.player.pending != nil }
         player.onFailure?()
         await waitFor(.disconnected)
         XCTAssertFalse(session.isConversationActive)
@@ -574,20 +600,22 @@ final class ResponseLifecycleTests: XCTestCase {
     func testOldReceiveCannotStartAudioOnReconnectedConversation() async {
         await setup()
         await beginReply()
-        while transport.pending == nil { await Task.yield() }
+        await milestone("old receive callback held") { self.transport.pending != nil }
         let oldRead = transport.pending
         transport.pending = nil
         session.disconnect()
         await session.connect()
         await session.startConversation()
         await session.submitCapture()
+        let returned = transport.completedReceives
         oldRead?.resume(returning: audioFrame(1))
-        while transport.pending == nil { await Task.yield() }
+        await milestone("stale receive returned to invalidated controller") { self.transport.completedReceives > returned }
+        await milestone("reconnected receiver waiting") { self.transport.pending != nil }
         XCTAssertEqual(session.state, .waiting)
         XCTAssertEqual(player.begins, 1)
         response()
         await waitFor(.playing)
-        while player.pending == nil { await Task.yield() }
+        await milestone("reconnected reply awaiting drain") { self.player.pending != nil }
         XCTAssertEqual(player.begins, 2)
         session.disconnect()
     }
@@ -614,7 +642,7 @@ final class ResponseLifecycleTests: XCTestCase {
 
     func testReceiveFailureDisconnectsWithoutAutomaticReconnect() async {
         await setup()
-        while transport.pending == nil { await Task.yield() }
+        await milestone("receive held before network failure") { self.transport.pending != nil }
         let pending = transport.pending
         transport.pending = nil
         pending?.resume(throwing: URLError(.networkConnectionLost))
@@ -626,6 +654,8 @@ final class ResponseLifecycleTests: XCTestCase {
 
 @MainActor
 private final class ResponseTransport: ConversationTransport {
+    let events: AsyncTestGate
+    init(events: AsyncTestGate) { self.events = events }
     var onDisconnect: (() -> Void)?
     var pending: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
     var queue: [URLSessionWebSocketTask.Message] = []
@@ -634,13 +664,17 @@ private final class ResponseTransport: ConversationTransport {
     var disconnects = 0
     var onReceive: (() -> Void)?
     var onWaiting: (() -> Void)?
+    var completedReceives = 0
     func connect(to url: URL) async throws { connects += 1 }
     func send(text: String) async throws { sent.append(text) }
     func receive() async throws -> URLSessionWebSocketTask.Message {
+        defer { completedReceives += 1; events.signal() }
+        try Task.checkCancellation()
         onReceive?()
         if !queue.isEmpty { return queue.removeFirst() }
         return try await withCheckedThrowingContinuation {
             pending = $0
+            events.signal()
             onWaiting?()
         }
     }
@@ -656,11 +690,14 @@ private final class ResponseTransport: ConversationTransport {
         let pending = pending
         self.pending = nil
         pending?.resume(throwing: CancellationError())
+        events.signal()
     }
 }
 
 @MainActor
 private final class ResponsePlayer: ConversationPlayer {
+    let events: AsyncTestGate
+    init(events: AsyncTestGate) { self.events = events }
     var pending: CheckedContinuation<Void, Error>?
     /// Every chunk enqueued, in order.
     var buffers: [Data] = []
@@ -670,6 +707,7 @@ private final class ResponsePlayer: ConversationPlayer {
     var fail = false
     var holdStart = false
     var drained = false
+    var completedEnds = 0
     var onStarted: (() -> Void)?
     var onFailure: (() -> Void)?
     var onEnqueue: (() -> Void)?
@@ -686,13 +724,18 @@ private final class ResponsePlayer: ConversationPlayer {
         drained = false
         if !holdStart { onStarted?() }
         onEnqueue?()
+        events.signal()
     }
     func endStream() async throws {
+        defer { completedEnds += 1; events.signal() }
         ends += 1
         onStarted?()
         onEnd?()
         if drained { return }
-        try await withCheckedThrowingContinuation { pending = $0 }
+        try await withCheckedThrowingContinuation {
+            pending = $0
+            events.signal()
+        }
     }
     func finish() {
         drained = true
@@ -705,16 +748,20 @@ private final class ResponsePlayer: ConversationPlayer {
         let pending = pending
         self.pending = nil
         pending?.resume(throwing: CancellationError())
+        events.signal()
     }
 }
 
 @MainActor
 private final class ResponseSpeech: SpeechCapture {
+    let events: AsyncTestGate
+    init(events: AsyncTestGate) { self.events = events }
     var starts = 0
     var onStart: (() -> Void)?
     func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {
         starts += 1
         onStart?()
+        events.signal()
     }
     func finish() async throws -> String { "hello" }
     func cancel() {}
