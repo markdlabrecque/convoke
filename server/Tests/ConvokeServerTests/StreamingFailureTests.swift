@@ -17,8 +17,11 @@ final class StreamingFailureTests: XCTestCase {
         try await withHTTPFixture(truncated: false) { synthesizer, loop, closed in
             let writing = self.expectation(description: "consumer entered stalled write")
             let gate = loop.makePromise(of: Void.self)
+            // Production obtains an existential from makeSpeechSynthesizer. Scoped
+            // cleanup must dynamically dispatch to Kokoro's implementation too.
+            let source: any SpeechSynthesizer = synthesizer
             let task = Task { @MainActor in
-                try await synthesizer.consume("fixture") { _ in
+                try await source.consume("fixture") { _ in
                     try await CancellableWrite.run(on: loop) {
                         writing.fulfill()
                         return gate.futureResult
