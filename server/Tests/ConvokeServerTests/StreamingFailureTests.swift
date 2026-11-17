@@ -200,7 +200,11 @@ final class StreamingFailureTests: XCTestCase {
         let closed = expectation(description: "upstream HTTP channel closed")
         let server = try await ServerBootstrap(group: group)
             .childChannelInitializer { channel in
-                channel.pipeline.configureHTTPServerPipeline().flatMap {
+                // This single-request peer deliberately never ends its response.
+                // Pipelining assistance suppresses reads until response EOF, hiding
+                // the client's TCP close on read-driven platforms such as Darwin.
+                // Keep reads enabled so `closed` observes the real upstream socket.
+                channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: false).flatMap {
                     channel.pipeline.addHandler(HTTPFixture(truncated: truncated, closed: closed))
                 }
             }.bind(host: "127.0.0.1", port: 0).get()
