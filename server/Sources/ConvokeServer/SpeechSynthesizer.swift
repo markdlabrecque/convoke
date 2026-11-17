@@ -10,6 +10,9 @@ protocol SpeechSynthesizer {
     /// PCM in pieces of any size, pulled by the consumer as it sends them. Synthesizers that
     /// can only produce a whole reply inherit the default, which yields it as one piece.
     @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error>
+    /// Scoped consumption lets streaming implementations explicitly cancel owned work
+    /// when a downstream write throws, rather than relying on iterator deinitialization.
+    @MainActor func consume(_ text: String, consumer: @escaping PCMConsumer) async throws
 }
 
 typealias PCMConsumer = @MainActor (Data) async throws -> Void
