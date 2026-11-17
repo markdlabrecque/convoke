@@ -74,53 +74,21 @@ struct KokoroSpeechSynthesizer: SpeechSynthesizer {
         return audio
     }
 
-    /// Request cancellation is explicit, including when no upstream read is in flight.
-    /// AHC's delegate acknowledgement keeps body delivery pull-based and bounded.
-    @MainActor func consume(_ text: String, consumer: @escaping PCMConsumer) async throws {
-        let request = try await openRequest(text)
-        defer { request.cancel() }
-        let body = BodyPuller(request)
-        try await withTaskCancellationHandler {
-            while let piece = try await body.next() {
-                try Task.checkCancellation()
-                try await consumer(piece)
-            }
-        } onCancel: {
-            request.cancel()
-        }
-    }
-
+    /// Pull-based HTTP body reads preserve AHC's bounded transport read-ahead. Its body uses
+    /// NIO's high/low watermark producer, not an unbounded application queue. Dropping the
+    /// iterator on consumer failure cancels the transaction; cancellation during next() also
+    /// cancels it. Non-200 and non-PCM responses fail before any audio is returned.
     @MainActor func stream(_ text: String) async throws -> AsyncThrowingStream<Data, Error> {
-        let request = try await openRequest(text)
-        let body = BodyPuller(request)
-        return AsyncThrowingStream<Data, Error>(unfolding: {
-            try await withTaskCancellationHandler {
-                do {
-                    let piece = try await body.next()
-                    if piece == nil { request.cancel() }
-                    return piece
-                } catch {
-                    request.cancel()
-                    throw error
-                }
-            } onCancel: {
-                request.cancel()
-            }
-        })
-    }
-
-    @MainActor private func openRequest(_ text: String) async throws -> CancellableHTTPBody {
-        let payload = try JSONEncoder().encode(Request(input: text, voice: config.voice, stream: true))
-        let request = try HTTPClient.Request(url: config.baseURL + "/v1/audio/speech", method: .POST,
-                                            headers: ["content-type": "application/json"], body: .bytes(payload))
-        let body = CancellableHTTPBody(http: http, request: request)
-        do {
-            try await body.waitForHead()
-            return body
-        } catch {
-            body.cancel()
-            throw error
-        }
+        var request = HTTPClientRequest(url: config.baseURL + "/v1/audio/speech")
+        request.method = .POST
+        request.headers.add(name: "content-type", value: "application/json")
+        request.body = .bytes(try JSONEncoder().encode(Request(input: text, voice: config.voice, stream: true)))
+        let response = try await http.execute(request, timeout: .seconds(120))
+        guard response.status == .ok else { throw SpeechError.http(status: response.status.code) }
+        let type = response.headers.first(name: "content-type")?.lowercased().split(separator: ";").first.map(String.init) ?? "none"
+        guard Self.pcmTypes.contains(type) else { throw SpeechError.badResponse("content type is not raw PCM") }
+        let body = BodyPuller(response.body)
+        return AsyncThrowingStream<Data, Error>(unfolding: { try await body.next() })
     }
 }
 
