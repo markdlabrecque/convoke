@@ -40,6 +40,14 @@ Tests cover persistence, connection lifecycle and failures, state gating, JSON e
 
 On Linux, the portable command in the guide runs a limited controller/validator/queue/lifetime subset in a temporary package with a test-only Combine stand-in. It does not test Combine publishing, Apple adapters or audio hardware and is not a full Apple package pass. See the [Slice 4 regression matrix and results](../../docs/slice-4-29-verification.md) for exact scope and Pending Apple checks.
 
+## Pending phone verification: unexpected connection loss
+
+The owner-reported server-loss and sidecar-loss failures are recorded in [PR 60](https://github.com/markdlabrecque/convoke/pull/60); both visible-feedback checks remain **Pending** on a new dated build. Software tests do not establish physical iPhone behavior. After separate approval for installation and development-service failure setup, the owner can:
+
+1. During partial playback, separately exercise development server loss and speech sidecar loss. For each, check for a content-free error, disconnected/inactive state, stopped capture and playback, disabled Start, and no automatic recovery.
+2. Restore services, explicitly Connect and confirm Ready without listening, then Start a fresh turn. Confirm intentional End, Disconnect and backgrounding do not create a false error.
+3. Record the date, build, device and result for each case. No owner verification or an inconclusive trigger means Pending. Interruption and route checks remain separate.
+
 ## Response playback
 
 The controller owns one receive loop over `ConversationTransport.receive()`. `WebSocketTransport` keeps ownership of the URLSession reader. The controller accepts `agent.text`, sequential zero-based `agent.audio` chunks, then a matching `agent.done`. Binary frames, malformed JSON, extra fields, invalid types/order, empty or unaligned PCM, and unsupported session states disconnect with a generic log. Frame, chunk, and total PCM limits are 32768 UTF-8 bytes, 16384 decoded bytes, and 8 MiB. Transcript contents and audio are never written to disk or logs.

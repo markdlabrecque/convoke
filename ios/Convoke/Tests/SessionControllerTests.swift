@@ -184,8 +184,48 @@ final class SessionControllerTests: XCTestCase {
         await session.startCapture()
         transport.onDisconnect?()
         XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.errorMessage, "The connection to the server failed. Connect again to start a new conversation.")
         XCTAssertEqual(speech.cancels, 1)
         XCTAssertNil(timer.action)
+    }
+
+    func testRemoteCloseRecoveryAndStaleCallback() async {
+        makeSession()
+        await connect()
+        await session.startConversation()
+        let oldClose = transport.onDisconnect
+        oldClose?()
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(session.state, .disconnected)
+        await session.startConversation()
+        XCTAssertEqual(speech.starts, 1)
+        await connect()
+        XCTAssertNil(session.errorMessage)
+        XCTAssertFalse(session.isConversationActive)
+        oldClose?()
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertNil(session.errorMessage)
+        await session.startConversation()
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertEqual(speech.starts, 2)
+    }
+
+    func testIntentionalDisconnectIgnoresLateCloseAndPreservesRecognitionError() async {
+        makeSession()
+        await connect()
+        speech.startError = TestError.failed
+        await session.startConversation()
+        let specific = session.errorMessage
+        XCTAssertNotNil(specific)
+        let oldClose = transport.onDisconnect
+        oldClose?()
+        XCTAssertEqual(session.errorMessage, specific)
+        await connect()
+        let intentionalClose = transport.onDisconnect
+        session.disconnect()
+        intentionalClose?()
+        XCTAssertNil(session.errorMessage)
+        XCTAssertEqual(session.state, .disconnected)
     }
 
     func testPermissionAndRecognitionErrorsReturnToReadyWithoutTextLogs() async {
@@ -212,11 +252,31 @@ final class SessionControllerTests: XCTestCase {
         transport.connectError = TestError.failed
         await session.connect()
         XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.errorMessage, "Could not connect to the server.")
         transport.connectError = nil
         await connect()
         transport.sendError = TestError.failed
         await session.startCapture()
         await session.submitCapture()
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.errorMessage, "Sending to the server failed.")
+    }
+
+    func testRemoteCloseDuringConnectRetainsConnectFailure() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.holdConnect = true
+        let held = expectation(description: "connect held")
+        transport.onConnectHeld = { held.fulfill() }
+        let connecting = AsyncTestGate.Operation { await self.session.connect() }
+        defer { connecting.cancel() }
+        await fulfillment(of: [held], timeout: 2)
+        transport.onDisconnect?()
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.errorMessage, "Could not connect to the server.")
+        transport.pendingConnect?.resume()
+        transport.pendingConnect = nil
+        try await connecting.join(named: "closed connect returned")
         XCTAssertEqual(session.state, .disconnected)
     }
 
@@ -239,7 +299,10 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .connecting)
         await session.startCapture()
         XCTAssertEqual(speech.starts, 0)
+        let oldClose = transport.onDisconnect
         session.disconnect()
+        oldClose?()
+        XCTAssertNil(session.errorMessage)
         transport.pendingConnect?.resume()
         transport.pendingConnect = nil
         try await connecting.join(named: "stale connect returned")
