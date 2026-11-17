@@ -25,9 +25,11 @@ final class WebSocketTransportTests: XCTestCase {
         await controller.startCapture()
         XCTAssertEqual(controller.state, .recording)
         let disconnected = expectation(description: "Remote close stops capture without receive")
-        transport.onDisconnect = { controller.disconnect(); disconnected.fulfill() }
+        let productionCallback = try XCTUnwrap(transport.onDisconnect)
+        transport.onDisconnect = { productionCallback(); disconnected.fulfill() }
         await fulfillment(of: [disconnected], timeout: 3)
         XCTAssertEqual(controller.state, .disconnected)
+        XCTAssertEqual(controller.errorMessage, "The connection to the server failed. Connect again to start a new conversation.")
         XCTAssertEqual(speech.cancels, 1)
         XCTAssertTrue(timer.cancelled)
         await controller.submitCapture()

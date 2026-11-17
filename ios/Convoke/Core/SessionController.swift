@@ -146,6 +146,11 @@ public final class SessionController: ObservableObject {
         connectionID = id
         transport.onDisconnect = { [weak self] in
             guard let self, self.connectionID == id else { return }
+            if self.errorMessage == nil {
+                self.errorMessage = self.state == .connecting
+                    ? "Could not connect to the server."
+                    : "The connection to the server failed. Connect again to start a new conversation."
+            }
             self.disconnect()
         }
         state = .connecting

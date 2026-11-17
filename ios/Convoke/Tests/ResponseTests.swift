@@ -302,6 +302,8 @@ final class ResponseLifecycleTests: XCTestCase {
         await milestone("partial response processed and next receive held") { self.transport.queue.isEmpty && self.transport.pending != nil }
         transport.onDisconnect?()
         XCTAssertEqual(session.state, .disconnected)
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(session.errorMessage, "The connection to the server failed. Connect again to start a new conversation.")
         XCTAssertTrue(transport.queue.isEmpty)
         XCTAssertGreaterThan(player.stops, 0)
         player.buffers.removeAll()
@@ -345,6 +347,7 @@ final class ResponseLifecycleTests: XCTestCase {
         XCTAssertEqual(session.state, .waiting)
         session.endConversation()
         XCTAssertEqual(session.state, .disconnected)
+        XCTAssertNil(session.errorMessage)
         XCTAssertFalse(session.isConversationActive)
         XCTAssertEqual(speech.starts, 1)
     }
