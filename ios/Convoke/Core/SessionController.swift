@@ -73,7 +73,9 @@ public final class SessionController: ObservableObject {
     /// Silence after speech that ends a turn.
     public static let silenceSeconds: TimeInterval = 2.5
     /// Hard limit for one captured turn.
-    public static let captureLimitSeconds: TimeInterval = 60
+    public static let captureLimitSeconds: TimeInterval = 300
+    private static let maxTextBytes = 16384
+
     @Published public var serverURL: String {
         didSet { defaults.set(serverURL, forKey: Self.urlDefaultsKey) }
     }
@@ -299,8 +301,8 @@ public final class SessionController: ObservableObject {
             await resumeListeningIfActive()
             return
         }
-        guard text.utf8.count <= 4096 else {
-            log("Recognized text exceeds 4096 UTF-8 bytes")
+        guard text.utf8.count <= Self.maxTextBytes else {
+            log("Recognized text exceeds \(Self.maxTextBytes) UTF-8 bytes")
             errorMessage = "That was too long to send. Try a shorter turn."
             state = .ready
             await resumeListeningIfActive()
