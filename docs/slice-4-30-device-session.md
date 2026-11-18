@@ -6,7 +6,7 @@
 
 - Real iOS interruption and audio-route/configuration-change checks remain **Pending, deferred**.
 - Missing visible failure explanations on both development-server loss and Kokoro loss remain **Fail, acceptance discrepancies**. Playback stops and explicit recovery work, but the owner saw only Disconnected, without an error message.
-- The historical opt-in simulator audio-initialization failure remains separate and unresolved. Default skipped-engine CI does not resolve it.
+- The historical opt-in simulator audio-initialization failure did not reproduce on a later opt-in run at `ef74132`: **3 passed, 0 failed, 0 skipped** on an iPhone 17 simulator (iOS 27.2, build `24B8117`). The retained `optional-engine.xcresult` summary was read back on the development Mac with `xcrun xcresulttool get test-results summary`. This is evidence for that simulator run only, not proof of a general fix or of physical-device interruption or route behavior.
 
 The [development guide](development.md#physical-checklist-and-results) contains the consolidated physical table. Historical Linux, Mac and CI results remain at their original revisions. This session does not retroactively pass failed or unavailable checks.
 
