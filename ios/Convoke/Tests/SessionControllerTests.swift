@@ -640,6 +640,7 @@ final class SessionControllerTests: XCTestCase {
         await fulfillment(of: [sent], timeout: 2)
         XCTAssertEqual(transport.sent.count, 1)
         XCTAssertEqual(session.state, .waiting)
+        XCTAssertEqual(session.statusText, "Waiting for reply")
         XCTAssertNil(timer.action, "Capture limit is cancelled after submission")
         XCTAssertNil(silence.action)
         XCTAssertEqual(speech.finishes, 1)
@@ -796,6 +797,7 @@ final class SessionControllerTests: XCTestCase {
         let submitting = AsyncTestGate.Operation { await self.session.submitCapture() }
         defer { submitting.cancel() }
         try await speech.events.wait(until: { self.speech.pendingFinish != nil }, named: "finalization callback held before End")
+        XCTAssertEqual(session.statusText, "Finishing speech recognition")
         session.endConversation()
         speech.pendingFinish?.resume(returning: "discard me")
         speech.pendingFinish = nil
