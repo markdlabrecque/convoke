@@ -68,6 +68,47 @@ unset CONVOKE_KOKORO_VOICE               # use the default af_heart
 
 The same command works on an Apple Silicon Mac. Docker must be running; the first pull and startup can take time. Keep this development sidecar local and verify the published binding with `docker port convoke-kokoro`, which must show `127.0.0.1:8880`. Restart Convoke after setting the environment variables; exporting them in a different shell does not change an already-running server. An unreachable or failing sidecar logs the reason (a status code or error type, never text or audio) and closes the turn with WebSocket code 1011 (server error); there is no fallback to another voice. Accepted PCM content types are `audio/pcm`, `audio/l16` and `audio/x-pcm`, with optional parameters. MP3, WAV and other content types are rejected. Raw PCM is not inspected for container signatures.
 
+## Hermes
+
+**Untested with this server and a physical iPhone.** This configuration uses Hermes' existing OpenAI-compatible API; it does not enable the API or change Hermes configuration. Use a Linux development machine already running the main Hermes agent with its API on IPv4 loopback, port `8642` (`localhost` must resolve to that listener).
+
+1. On that machine, use the [Linux notes](#linux) and start the [Kokoro sidecar](#kokoro-speech-optional-sidecar). Set `CONVOKE_KOKORO_URL` in the Rex terminal where you'll start Convoke. Kokoro is required for speech on Linux.
+2. From the repository root in that Bash terminal, adapt the [Run command](#run) as follows. At the hidden prompt, enter only the existing `API_SERVER_KEY` value from `~/.hermes/.env`. Do not source the file or paste the key into a command, the phone, or any notes. The prompt does not echo the key, and the export is confined to the server's launch subshell and its children.
+
+   ```bash
+   (
+     set +x
+     export CONVOKE_AGENT_BASE_URL=http://localhost:8642/v1
+     export CONVOKE_AGENT_MODEL=hermes-agent
+     unset CONVOKE_BIND_HOST PORT  # use the default loopback bind and port 8080
+     export CONVOKE_TURN_TIMEOUT_SECONDS=600
+     IFS= read -rs -p 'Hermes API_SERVER_KEY: ' CONVOKE_AGENT_API_KEY || exit 1
+     printf '\n'
+     [[ -n "$CONVOKE_AGENT_API_KEY" ]] || exit 1
+     export CONVOKE_AGENT_API_KEY
+     cd server || exit 1
+     exec swift run ConvokeServer serve
+   )
+   ```
+
+   The suggested `600` seconds gives tool-using turns more time; the default is `120`. The deadline covers the agent reply, synthesis, and socket writes, not just Hermes' work.
+3. With the phone and Linux machine on the same trusted tailnet, use [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) in a separate terminal on the Linux machine. With tailnet HTTPS enabled, this example forwards tailnet HTTPS port `8443` to Convoke's loopback port `8080`:
+
+   ```sh
+   tailscale serve --https=8443 8080
+   ```
+
+   In the iPhone app, enter `wss://<machine>.<tailnet>.ts.net:<port>/conversation`. Use the DNS name shown by Serve and replace `<port>` with `8443` (or the HTTPS port you chose), not `8080`. This WSS connection is **untested with Convoke**. Serve terminates TLS, but Convoke has **no client token authentication**: any tailnet client allowed to reach this port can use the Hermes agent through it. Restrict access to the intended user/device with tailnet access rules. Do not use Funnel or expose the server publicly.
+
+Known limits (Hermes behavior inferred from source, not confirmed by this setup):
+
+- The phone cannot approve guarded actions. They are expected to be refused, but this is unconfirmed. Do not treat approval guards as a sandbox.
+- Hanging up or hitting the turn deadline stops speech on the phone, not necessarily the Hermes run. Hermes may finish the turn, including tool calls.
+- Hermes derives its session from the system prompt and first user message. Two conversations that open with the same words may share a Hermes session even after reconnecting.
+- Memory is shared with the main Hermes agent. A new conversation is not a memory reset. Use only harmless, non-sensitive content.
+
+See the [owner's live checklist](../docs/hermes-basic-check.md) for pending verification and [deferred native Hermes work (#91)](https://github.com/markdlabrecque/convoke/issues/91) for features this configuration does not provide.
+
 ## Internal exchange
 
 Send a JSON text message containing only `type` and `text`:
