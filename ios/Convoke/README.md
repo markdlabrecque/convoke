@@ -18,8 +18,8 @@ For the complete Mac/Tailscale setup, recorded automated results, and physical-i
 ## Conversation flow
 
 1. Enter `ws://<Mac Tailscale IP>:8080/conversation`, replacing the placeholder with the Mac's numeric Tailscale IP. The URL is the only app setting saved to UserDefaults.
-2. Tap Connect and wait for Connected. This means the WebSocket handshake completed. Connect never opens the microphone.
-3. Tap Start conversation. Allow microphone access. The first run may download the on-device speech model ("Preparing speech recognition"). Recognition uses `SpeechAnalyzer` and `SpeechTranscriber` (iOS 26+) and runs on the device; there is no cloud fallback.
+2. Tap Start conversation. Convoke connects to the saved server if needed and starts listening once the app is active and the WebSocket handshake has succeeded. Tap Disconnect to cancel while connecting. Use Connect by itself if you only want to check the server connection; it never opens the microphone.
+3. Allow microphone access when prompted. The first run may download the on-device speech model ("Preparing speech recognition"). Recognition uses `SpeechAnalyzer` and `SpeechTranscriber` (iOS 26+) and runs on the device; there is no cloud fallback.
 4. Speak. The turn is submitted automatically after 2.5 seconds of silence following speech; the countdown restarts on every transcript change and never runs before speech is heard. A 300-second (5-minute) capture limit also submits (an empty result just keeps listening). After submission the app ends audio input and waits up to five seconds for the recognizer's finalized text. It never sends volatile or partial text as a substitute. Text over 16384 UTF-8 bytes or an encoded frame over 32768 bytes is rejected with a visible message.
 5. A successful send leaves the app in Waiting while it buffers the response. Playing begins when the player starts, at 9600 PCM bytes buffered or at EOF for a shorter reply. Later chunks arrive while it plays. An empty queue before EOF is an underrun, not a reason to listen. Listening resumes only after validated `agent.done` and actual final playback drain.
 6. Tap End conversation to stop. Listening and playback are cancelled and the connection stays open. If the server is still sending the reply (Waiting, or Playing before `agent.done`), the protocol cannot cancel the turn, so ending closes the connection. Disconnect and backgrounding also end the conversation.
@@ -31,6 +31,21 @@ The transport keeps a raw WebSocket read pending so URLSession processes remote 
 Disconnect discards capture, cancels timers and transport monitoring, clears buffered frames, stops the player, and closes the socket. Backgrounding the app does the same. The app never reconnects automatically. Failures write a generic developer log without transcript contents. In the November 16 physical server-loss and sidecar-loss checks, audio stopped and explicit recovery worked, but the owner saw only Disconnected without a failure explanation. The required visible-error behavior remains an acceptance discrepancy; generic developer logging is not a substitute.
 
 The app has no bearer token or application authentication. Use only a trusted development network and enforce access controls on the Mac. The developer-configured numeric IP requires a cleartext ATS allowance, so this developer app includes `NSAllowsArbitraryLoads`. Do not add `NSAllowsLocalNetworking` alongside it, because on iOS 10+ that key causes the arbitrary-loads exception to be ignored. Do not carry the broad exception into a production release. Transcript text is held in memory for sending, not stored by the app or written to its logs.
+
+## Start with the Action Button
+
+On an iPhone with an Action Button, go to **Settings → Action Button → Shortcut**, tap **Choose a Shortcut**, and select Convoke's **Start Conversation**. Press and hold the button to open or focus Convoke and start without a second tap. You can also run the App Shortcut in Shortcuts or use the on-screen Start conversation button on any supported iPhone.
+
+Unlock the phone if iOS asks. Convoke won't start capture while locked or in the background, and a cancelled launch won't start a conversation later. Another press during startup or an active conversation has no effect. If you pressed Connect separately, wait for it to finish before running the shortcut. If startup fails, read the error on the conversation screen, fix the address, server, or permissions as needed, then explicitly start again. Ordinary app launches and server disconnects never start listening.
+
+### Physical-iPhone verification pending
+
+On a signed development build and an Action Button iPhone, verify that the shortcut appears in Settings and can be assigned. Press it on an unlocked phone from Home with Convoke closed, from Home with Convoke already running, and with Convoke visible. Each should start once without an in-app tap. Press again during startup and while listening; neither should replace the conversation. Also verify:
+
+- Cancel the unlock prompt or foreground handoff; an ordinary launch after that must not listen.
+- Tap Disconnect during connection startup or leave the app. A late handshake must not start capture. Backgrounding during a conversation must stop capture and close the connection.
+- Tap Start conversation while disconnected. With a reachable development server and permissions granted, one tap should reach Listening. On first use, confirm the permission prompt and model preparation finish before the microphone opens. Switch the Bluetooth audio route during speech preparation and check that capture starts on the current route or fails safely.
+- Try an unreachable development server or deny microphone access. The app should show an error without retrying or recording later on its own. Fix the problem and retry explicitly.
 
 ## Tests and builds
 
@@ -44,8 +59,8 @@ On Linux, the portable command in the guide runs a limited controller/validator/
 
 The owner-reported server-loss and sidecar-loss failures are recorded in [PR 60](https://github.com/markdlabrecque/convoke/pull/60); both visible-feedback checks remain **Pending** on a new dated build. Software tests do not establish physical iPhone behavior. After separate approval for installation and development-service failure setup, the owner can:
 
-1. During partial playback, separately exercise development server loss and speech sidecar loss. For each, check for a content-free error, disconnected/inactive state, stopped capture and playback, disabled Start, and no automatic recovery.
-2. Restore services, explicitly Connect and confirm Ready without listening, then Start a fresh turn. Confirm intentional End, Disconnect and backgrounding do not create a false error.
+1. During partial playback, separately exercise development server loss and speech sidecar loss. For each, check for a content-free error, disconnected/inactive state, stopped capture and playback, and no automatic recovery.
+2. Restore services and tap Start conversation to connect and start a fresh turn. Separately, check that Connect alone still reaches Ready without listening. Confirm intentional End, Disconnect and backgrounding do not create a false error.
 3. Record the date, build, device and result for each case. No owner verification or an inconclusive trigger means Pending. Interruption and route checks remain separate.
 
 ## Response playback

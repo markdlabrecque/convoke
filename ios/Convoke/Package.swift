@@ -10,7 +10,8 @@ let package = Package(
         .testTarget(
             name: "ConvokeCoreTests", dependencies: ["ConvokeCore"], path: ".",
             exclude: ["Core", "App/ContentView.swift",
-                      "App/ConvokeApp.swift", "App/Info.plist", "Convoke.xcodeproj",
+                      "App/ConvokeApp.swift", "App/StartConversationIntent.swift",
+                      "App/Info.plist", "Convoke.xcodeproj",
                       "README.md", "project.yml", "scripts"],
             sources: ["Tests", "App/WebSocketTransport.swift", "App/AppleSpeechCapture.swift", "App/PCMPlayer.swift"]
         )

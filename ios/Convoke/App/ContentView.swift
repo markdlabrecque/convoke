@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var session: SessionController
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 24) {
@@ -34,20 +33,15 @@ struct ContentView: View {
                 if session.isConversationActive {
                     session.endConversation()
                 } else {
-                    Task { await session.startConversation() }
+                    Task { await ConvokeApp.requestConversationStart() }
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!session.isConversationActive && session.state != .ready)
+            .disabled(!session.isConversationActive && session.state != .ready && session.state != .disconnected)
             Text("Developer-only. Use a trusted network. Speech is recognized on this device.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
         .padding()
-        .onChange(of: scenePhase) { phase in
-            // Foreground-only. A permission sheet makes the scene inactive, so
-            // disconnect only on background, not while requesting permissions.
-            if phase == .background { session.disconnect() }
-        }
     }
 }

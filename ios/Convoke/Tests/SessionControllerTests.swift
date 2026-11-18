@@ -376,6 +376,237 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .recording)
     }
 
+    // MARK: Explicit Start (button and shortcut)
+
+    func testExplicitStartConnectsSavedURLThenListensOnce() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.holdConnect = true
+        let held = expectation(description: "Start is connecting")
+        transport.onConnectHeld = { held.fulfill() }
+        let start = try await acceptedStart()
+        await fulfillment(of: [held], timeout: 2)
+        XCTAssertEqual(session.state, .connecting)
+        XCTAssertEqual(transport.url?.absoluteString, defaults.string(forKey: SessionController.urlDefaultsKey))
+        XCTAssertEqual(speech.starts, 0)
+        guard case .alreadyInProgress = await requestStart() else { return XCTFail("Duplicate Start was accepted") }
+        transport.pendingConnect?.resume()
+        transport.pendingConnect = nil
+        await start.value
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertTrue(session.isConversationActive)
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(speech.starts, 1)
+        guard case .alreadyInProgress = await requestStart() else { return XCTFail("Active conversation was replaced") }
+        XCTAssertEqual(speech.starts, 1)
+    }
+
+    func testStartDuringConnectOnlyHandshakeIsNotAccepted() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.holdConnect = true
+        let held = expectation(description: "Connect-only handshake held")
+        transport.onConnectHeld = { held.fulfill() }
+        let connecting = AsyncTestGate.Operation { await self.session.connect() }
+        await fulfillment(of: [held], timeout: 2)
+        guard case .connectionInProgress = await requestStart() else {
+            return XCTFail("A Connect-only handshake must not be reported as an accepted Start")
+        }
+        transport.pendingConnect?.resume()
+        transport.pendingConnect = nil
+        try await connecting.join(named: "Connect-only handshake completed")
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(speech.starts, 0)
+        let retry = try await acceptedStart()
+        await retry.value
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(speech.starts, 1)
+    }
+
+    func testExplicitStartReusesReadyConnection() async throws {
+        makeSession()
+        await connect()
+        XCTAssertEqual(speech.starts, 0, "Connect alone must not start capture")
+        let start = try await acceptedStart()
+        await start.value
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertEqual(session.state, .recording)
+    }
+
+    func testExplicitStartFailuresRequireManualRetry() async throws {
+        makeSession()
+        let invalid = try await acceptedStart()
+        await invalid.value
+        XCTAssertEqual(session.errorMessage, "Enter a valid ws:// or wss:// URL.")
+        XCTAssertEqual(transport.connects, 0)
+        XCTAssertEqual(speech.starts, 0)
+
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.connectError = TestError.failed
+        let failed = try await acceptedStart()
+        await failed.value
+        XCTAssertEqual(session.errorMessage, "Could not connect to the server.")
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(speech.starts, 0)
+
+        transport.connectError = nil
+        speech.startError = SpeechCaptureError.microphoneDenied
+        let denied = try await acceptedStart()
+        await denied.value
+        XCTAssertEqual(session.errorMessage, SpeechCaptureError.microphoneDenied.message)
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertFalse(session.isConversationActive)
+        XCTAssertEqual(speech.starts, 1)
+
+        speech.startError = nil
+        let retry = try await acceptedStart()
+        await retry.value
+        XCTAssertEqual(transport.connects, 2)
+        XCTAssertEqual(speech.starts, 2)
+        XCTAssertNil(session.errorMessage)
+    }
+
+    func testDisconnectInvalidatesHandshakeBeforeReplacementConnect() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.holdConnect = true
+        let held = expectation(description: "Start handshake held")
+        transport.onConnectHeld = { held.fulfill() }
+        let start = try await acceptedStart()
+        await fulfillment(of: [held], timeout: 2)
+        session.disconnect() // The Disconnect button and background teardown both use this.
+        transport.holdConnect = false
+        await connect()
+        transport.pendingConnect?.resume()
+        transport.pendingConnect = nil
+        await start.value
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(transport.connects, 2)
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertNil(session.errorMessage)
+    }
+
+    func testHandshakeCompletingWhileInactiveCannotStartUntilSceneIsActive() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        transport.holdConnect = true
+        let transportHeld = expectation(description: "Start handshake held")
+        transport.onConnectHeld = { transportHeld.fulfill() }
+        let scene = AsyncTestGate()
+        let sceneHeld = expectation(description: "Wait for active scene after handshake")
+        scene.onWait = { sceneHeld.fulfill() }
+        var active = true
+        let start = try await acceptedStart { isCurrent in
+            if !active { try? await scene.wait(after: 0, named: "scene activation") }
+            return active && isCurrent()
+        }
+        await fulfillment(of: [transportHeld], timeout: 2)
+        active = false
+        transport.pendingConnect?.resume()
+        transport.pendingConnect = nil
+        await fulfillment(of: [sceneHeld], timeout: 2)
+        XCTAssertEqual(session.state, .ready)
+        XCTAssertEqual(speech.starts, 0)
+        // Backgrounding invalidates the pending Start even if the phone immediately returns.
+        session.disconnect()
+        active = true
+        scene.signal()
+        await start.value
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertNil(session.errorMessage)
+    }
+
+    func testColdHandoffWaitsForActivationAndIsConsumedOnce() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        let scene = AsyncTestGate()
+        let held = expectation(description: "Shortcut waiting for active scene")
+        scene.onWait = { held.fulfill() }
+        let handoff = Task { @MainActor in
+            await self.session.requestConversationStart { isCurrent in
+                (try? await scene.wait(after: 0, named: "scene activation")) != nil && isCurrent()
+            }
+        }
+        await fulfillment(of: [held], timeout: 2)
+        XCTAssertEqual(transport.connects, 0)
+        XCTAssertEqual(speech.starts, 0)
+        guard case .alreadyInProgress = await requestStart() else { return XCTFail("A second handoff was accepted") }
+        scene.signal()
+        guard case .accepted(let start) = await handoff.value else { return XCTFail("Active scene did not accept Start") }
+        await start.value
+        XCTAssertEqual(speech.starts, 1)
+        session.endConversation()
+        scene.signal()
+        XCTAssertEqual(transport.connects, 1)
+        XCTAssertEqual(speech.starts, 1)
+        XCTAssertEqual(session.state, .ready)
+    }
+
+    func testBackgroundBeforeColdHandoffActivationDoesNotReplayOnOrdinaryLaunch() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        let scene = AsyncTestGate()
+        let held = expectation(description: "Cold handoff waiting for activation")
+        scene.onWait = { held.fulfill() }
+        let handoff = Task { @MainActor in
+            await self.session.requestConversationStart { _ in
+                // Simulate the app becoming active on a later, ordinary launch.
+                (try? await scene.wait(after: 0, named: "scene activation")) != nil
+            }
+        }
+        await fulfillment(of: [held], timeout: 2)
+        session.disconnect() // App-level background notification.
+        scene.signal()
+        guard case .unavailable = await handoff.value else { return XCTFail("An interrupted Start was replayed") }
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(transport.connects, 0)
+        XCTAssertEqual(speech.starts, 0)
+        XCTAssertNil(session.errorMessage)
+    }
+
+    func testUnavailableOrCancelledHandoffDoesNotReplayOnLaterActivation() async throws {
+        makeSession()
+        session.serverURL = "ws://localhost:8080/conversation"
+        guard case .unavailable = await session.requestConversationStart(whenActive: { _ in false }) else {
+            return XCTFail("Unavailable scene accepted Start")
+        }
+        let scene = AsyncTestGate()
+        let held = expectation(description: "Shortcut waiting before cancellation")
+        scene.onWait = { held.fulfill() }
+        let handoff = Task { @MainActor in
+            await self.session.requestConversationStart { _ in
+                try? await scene.wait(after: 0, named: "scene activation")
+                return true // Even a racing success must not outlive the cancelled invocation.
+            }
+        }
+        await fulfillment(of: [held], timeout: 2)
+        handoff.cancel()
+        scene.signal()
+        guard case .unavailable = await handoff.value else { return XCTFail("Cancelled handoff accepted Start") }
+        XCTAssertEqual(transport.connects, 0)
+        await connect()
+        XCTAssertEqual(speech.starts, 0)
+        let explicitRetry = try await acceptedStart()
+        await explicitRetry.value
+        XCTAssertEqual(speech.starts, 1)
+    }
+
+    private func requestStart() async -> SessionController.StartRequest {
+        await session.requestConversationStart { $0() }
+    }
+
+    private func acceptedStart(
+        whenActive: @escaping @MainActor (@MainActor () -> Bool) async -> Bool = { $0() }
+    ) async throws -> Task<Void, Never> {
+        guard case .accepted(let attempt) = await session.requestConversationStart(whenActive: whenActive) else {
+            throw AsyncTestGate.Failure(description: "Expected Start to be accepted")
+        }
+        return attempt
+    }
+
     // MARK: Hands-free conversation
 
     func testStartConversationListensAndSilenceTimerOnlyRunsAfterSpeech() async {
