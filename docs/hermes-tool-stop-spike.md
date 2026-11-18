@@ -1,6 +1,12 @@
 # Hermes tool-stop confirmation: bounded evidence spike
 
-For [issue 80](https://github.com/markdlabrecque/convoke/issues/80), under [epic 61](https://github.com/markdlabrecque/convoke/issues/61). Documentation and synthetic evidence only. **Coordinator review pending; H0 and runtime dependants remain gated.**
+For [issue 80](https://github.com/markdlabrecque/convoke/issues/80), under [epic 61](https://github.com/markdlabrecque/convoke/issues/61). Documentation and synthetic evidence only. **Research accepted via PR 81; H0 and runtime dependants remain gated.**
+
+## Current disposition — evidence retained, core delivery plan superseded
+
+The owner subsequently required unmodified official Hermes, no maintained fork, and stopped core implementation in issues 78/84. Core-extension follow-ups below are historical recommendations, not an authorized delivery plan. T/R describe local experimental source, not installed or official public capabilities. Preserve experiments for reference; no resumption, publication, deployment or cleanup is authorized. No private monkeypatch, overlay, custom build or plugin-delivered core replacement is an acceptable workaround.
+
+[Issue 87](https://github.com/markdlabrecque/convoke/issues/87) assesses supported public plugin reporting, reusing this evidence rather than repeating the spike. Observing handler return/cancellation is not proof of complete resource settlement; lost-admission recovery remains separate. See [the current contract](hermes-api-contract.md) for the authoritative no-fork/shared-memory decisions and open B2–B5 gates.
 
 ## Verdict
 

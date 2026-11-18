@@ -2,7 +2,13 @@
 
 Assessment for [issue 82](https://github.com/markdlabrecque/convoke/issues/82), under [epic 61](https://github.com/markdlabrecque/convoke/issues/61). **Documentation-only recommendation for coordinator review. No implementation or runtime unblock.** Four-hour human-equivalent bounded assessment: source/API mapping 2h, first-slice specification 1h, checks/review 1h; not a second broad stop spike.
 
-## Recommendation
+## Current disposition — historical core recommendation superseded
+
+This assessment was accepted as research in issue 82 / PR 83, **not as installed capability**. The owner subsequently required unmodified official Hermes and withdrew core implementation approval for issues 78/84. The proposed core API and implementation specification below are preserved as historical findings only: no fork, core patch, private monkeypatch, overlay, custom build or plugin-delivered core replacement is authorized. T/R pins include local experimental code and must not be represented as official public plugin capabilities. Preserve existing experimental work for reference; do not resume, publish, deploy or clean it up.
+
+[Issue 87](https://github.com/markdlabrecque/convoke/issues/87) is the next bounded assessment of supported public plugin reporting to Convoke. It must cite official source separately, distinguish observable handler/cancellation events from physical settlement, and identify remaining admission/coverage gaps. It is not an implementation/install task or proof that a plugin can clear H0. See [the current contract](hermes-api-contract.md); issue 62 and runtime dependants remain blocked.
+
+## Historical recommendation — not current delivery authorization
 
 **Use a small new public core-owned invocation capability with plugin-owned resource adapters. Do not implement settlement as execution middleware or an observer.** Existing supported plugin seams can supply behavior and routing, but none supplies the registration-before-effects, producer seal and transitive physical acknowledgement contract Convoke needs. The terminal-environment seam is real but is not a lifecycle interception seam for built-in `local`, and its actual factory refuses hosted environments. The public subagent lifecycle service is useful but is not an all-caused-work closure certificate.
 
