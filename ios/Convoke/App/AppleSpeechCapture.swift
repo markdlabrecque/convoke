@@ -19,18 +19,23 @@ final class AppleSpeechCapture: SpeechCapture {
     private var finalText: String?
     private(set) var isFinishing = false
     private let finalResultTimeout: UInt64
+    private let waitForActivation: @MainActor (@MainActor () -> Bool) async -> Bool
     private var completion: CheckedContinuation<String, Error>?
     private var finalDeadline: Task<Void, Never>?
     private var operation = UUID()
     private var hasTap = false
 
-    init(finalResultTimeout: UInt64 = 5_000_000_000) {
+    init(finalResultTimeout: UInt64 = 5_000_000_000,
+         waitForActivation: @escaping @MainActor (@MainActor () -> Bool) async -> Bool = { $0() }) {
         self.finalResultTimeout = finalResultTimeout
+        self.waitForActivation = waitForActivation
     }
 
     func start(onSpeech: @escaping () -> Void, onFailure: @escaping () -> Void) async throws {
         cancel()
         let id = operation
+        let isCurrent: @MainActor () -> Bool = { self.operation == id }
+        try await requireActive(isCurrent)
         let microphoneAllowed = await AVCaptureDevice.requestAccess(for: .audio)
         guard operation == id else { throw CancellationError() }
         guard microphoneAllowed else { throw SpeechCaptureError.microphoneDenied }
@@ -57,17 +62,13 @@ final class AppleSpeechCapture: SpeechCapture {
         }
         guard operation == id else { throw CancellationError() }
         do {
+            // Permissions and model preparation can suspend across scene changes.
+            try await requireActive(isCurrent)
             #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
             #endif
-            let input = engine.inputNode
-            let microphoneFormat = input.outputFormat(forBus: 0)
-            guard microphoneFormat.sampleRate > 0, microphoneFormat.channelCount > 0,
-                  let converter = AVAudioConverter(from: microphoneFormat, to: analyzerFormat) else {
-                throw SpeechCaptureError.unavailable
-            }
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             self.analyzer = analyzer
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
@@ -87,7 +88,14 @@ final class AppleSpeechCapture: SpeechCapture {
                 self.processCompletion(failed: failed, onFailure: onFailure)
             }
             try await analyzer.start(inputSequence: stream)
-            guard operation == id else { throw CancellationError() }
+            try await requireActive(isCurrent)
+            // The input route can change while the analyzer or scene is starting.
+            let input = engine.inputNode
+            let microphoneFormat = input.outputFormat(forBus: 0)
+            guard microphoneFormat.sampleRate > 0, microphoneFormat.channelCount > 0,
+                  let converter = AVAudioConverter(from: microphoneFormat, to: analyzerFormat) else {
+                throw SpeechCaptureError.unavailable
+            }
             input.installTap(onBus: 0, bufferSize: 4096, format: microphoneFormat,
                              block: Self.makeTap(converter: converter, format: analyzerFormat,
                                                  continuation: continuation))
@@ -95,11 +103,17 @@ final class AppleSpeechCapture: SpeechCapture {
             engine.prepare()
             try engine.start()
         } catch {
-            let cancelled = operation != id
+            guard operation == id else { throw CancellationError() }
             cancel()
-            if cancelled || error is CancellationError { throw CancellationError() }
+            if error is CancellationError { throw CancellationError() }
             throw (error as? SpeechCaptureError) ?? SpeechCaptureError.unavailable
         }
+    }
+
+    private func requireActive(_ isCurrent: @MainActor () -> Bool) async throws {
+        let active = await waitForActivation(isCurrent)
+        guard isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        guard active else { throw SpeechCaptureError.unavailable }
     }
 
     // The tap runs on the audio thread, so it is built outside main-actor

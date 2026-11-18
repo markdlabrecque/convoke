@@ -96,6 +96,7 @@ public final class SessionController: ObservableObject {
     private let player: ConversationPlayer
     private let log: (String) -> Void
     private var connectionID = UUID()
+    private var startRequestID: UUID?
     private var captureID: UUID?
     private var receiver: Task<Void, Never>?
     private var playback: Task<Void, Never>?
@@ -135,6 +136,12 @@ public final class SessionController: ObservableObject {
 
     public func connect() async {
         guard state == .disconnected else { return }
+        // A manual connection never inherits a Start waiting for the scene.
+        startRequestID = nil
+        await connectTransport()
+    }
+
+    private func connectTransport() async {
         errorMessage = nil
         let value = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), ["ws", "wss"].contains(url.scheme?.lowercased() ?? ""),
@@ -170,6 +177,7 @@ public final class SessionController: ObservableObject {
     }
 
     public func disconnect() {
+        startRequestID = nil
         connectionID = UUID()
         transport.onDisconnect = nil
         captureID = nil
@@ -184,6 +192,46 @@ public final class SessionController: ObservableObject {
         silenceTimer.cancel()
         recognition.cancel()
         transport.disconnect()
+    }
+
+    public enum StartRequest {
+        case unavailable, connectionInProgress, alreadyInProgress, accepted(Task<Void, Never>)
+    }
+
+    /// Reserves one explicit Start while the scene activates. Once accepted,
+    /// the session owns the startup task, not the caller (such as Shortcuts).
+    public func requestConversationStart(
+        whenActive: @escaping @MainActor (@MainActor () -> Bool) async -> Bool
+    ) async -> StartRequest {
+        guard !Task.isCancelled else { return .unavailable }
+        guard startRequestID == nil, !isConversationActive else { return .alreadyInProgress }
+        // A Connect-only handshake has no Start request. Don't report it as one.
+        guard state != .connecting else { return .connectionInProgress }
+        guard state == .disconnected || state == .ready else { return .unavailable }
+        let id = UUID()
+        startRequestID = id
+        let isCurrent: @MainActor () -> Bool = { [weak self] in self?.startRequestID == id }
+        guard await whenActive(isCurrent), isCurrent(), !Task.isCancelled else {
+            if isCurrent() { startRequestID = nil }
+            return .unavailable
+        }
+
+        return .accepted(Task { @MainActor in
+            defer { if isCurrent() { self.startRequestID = nil } }
+            guard isCurrent(), !Task.isCancelled else { return }
+            if self.state == .disconnected { await self.connectTransport() }
+            guard isCurrent(), self.state == .ready, !Task.isCancelled else { return }
+            // The handshake can finish while a system prompt has the scene inactive.
+            guard await whenActive(isCurrent), isCurrent(), !Task.isCancelled else {
+                if isCurrent(), !Task.isCancelled {
+                    self.errorMessage = "Open Convoke and tap Start conversation again."
+                }
+                return
+            }
+            // Subsequent requests see either this reservation or an active conversation.
+            self.startRequestID = nil
+            await self.startConversation()
+        })
     }
 
     /// Starts the hands-free conversation. The connection must be Ready.
