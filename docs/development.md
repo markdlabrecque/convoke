@@ -29,7 +29,7 @@ This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro bas
 
    To use the macOS voice instead, unset `CONVOKE_KOKORO_URL` before starting Convoke. This does not count as Kokoro verification. Restart the server whenever changing its voice configuration.
 
-3. Confirm the server listens on `0.0.0.0:8080` and that the Mac firewall only allows the tailnet.
+3. The server listens on `127.0.0.1:8080` by default. For direct `ws://` access from the phone, set `CONVOKE_BIND_HOST` to the Mac's numeric tailnet address from step 1 before starting the server (or restart it with the variable set). Confirm it listens on that address and that the Mac firewall only allows the tailnet.
 4. Open `ios/Convoke/Convoke.xcodeproj`, scheme `Convoke`. Select your development team under Signing & Capabilities (signing is not tied to any account), choose the iPhone as destination, and run.
 
 ## Automated checks

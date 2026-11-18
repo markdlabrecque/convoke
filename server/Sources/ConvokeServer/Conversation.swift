@@ -6,9 +6,29 @@ enum ConversationError: Error {
     case invalidMessage, invalidAudio, audioLimit, synthesisFailed, noSynthesizer
 }
 
+struct ConversationConfig: Sendable {
+    let bindHost: String
+    let turnTimeout: TimeAmount
+
+    init(environment: [String: String], turnTimeout: TimeAmount? = nil) throws {
+        let host = environment["CONVOKE_BIND_HOST"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        bindHost = host.flatMap { $0.isEmpty ? nil : $0 } ?? "127.0.0.1"
+        if let turnTimeout {
+            self.turnTimeout = turnTimeout
+        } else if let value = environment["CONVOKE_TURN_TIMEOUT_SECONDS"] {
+            guard let seconds = Int64(value), (10...3600).contains(seconds) else {
+                throw Abort(.internalServerError, reason: "CONVOKE_TURN_TIMEOUT_SECONDS must be an integer from 10 to 3600")
+            }
+            self.turnTimeout = .seconds(seconds)
+        } else {
+            self.turnTimeout = .seconds(120)
+        }
+    }
+}
+
 enum ConversationProtocol {
     static let maxFrameBytes = 32_768
-    static let maxTextBytes = 4_096
+    static let maxTextBytes = 16_384
     static let maxChunkBytes = 16_384
     static let maxAudioBytes = 8 * 1_024 * 1_024
 
@@ -280,22 +300,28 @@ final class Conversation: @unchecked Sendable {
 
 func configure(
     _ app: Application,
-    turnTimeout: TimeAmount = .seconds(120),
+    turnTimeout: TimeAmount? = nil,
     synthesize: Conversation.Synthesize? = nil,
     stream: Conversation.SynthesizeStream? = nil,
     agent: (any Agent)? = nil
 ) throws {
-    // Missing agent configuration or a malformed CONVOKE_KOKORO_URL fails here, at startup.
-    let agent = try agent ?? OpenAIChatAgent(
-        client: app.client, config: AgentConfig(environment: ProcessInfo.processInfo.environment)
-    )
-    let kokoro = try KokoroConfig(environment: ProcessInfo.processInfo.environment)
+    // Validate configuration at startup, before the HTTP client is created.
+    let environment = ProcessInfo.processInfo.environment
+    let config = try ConversationConfig(environment: environment, turnTimeout: turnTimeout)
+    let kokoro = try KokoroConfig(environment: environment)
+    // AsyncHTTPClient has no default read timeout, but its connection timeout defaults to 10s.
+    if agent == nil {
+        app.http.client.configuration.timeout.connect = config.turnTimeout
+    }
     let client = app.client
+    let agent = try agent ?? OpenAIChatAgent(
+        client: client, config: AgentConfig(environment: environment), requestTimeout: config.turnTimeout
+    )
     let http = app.http.client.shared
     let streamAudio: Conversation.SynthesizeStream = stream
         ?? synthesize.map(SpeechAudio.stream(wrapping:))
         ?? { try await makeSpeechSynthesizer(kokoro: kokoro, client: client, http: http).stream($0) }
-    app.http.server.configuration.hostname = "0.0.0.0"
+    app.http.server.configuration.hostname = config.bindHost
     if let value = Environment.get("PORT") {
         guard let port = Int(value), (1...65535).contains(port) else {
             throw Abort(.internalServerError, reason: "PORT must be an integer from 1 to 65535")
@@ -317,7 +343,7 @@ func configure(
         let response = Response(status: .switchingProtocols)
         response.upgrader = ConversationUpgrader { socket in
             _ = Conversation(
-                socket: socket, timeout: turnTimeout, agent: agent, logger: app.logger,
+                socket: socket, timeout: config.turnTimeout, agent: agent, logger: app.logger,
                 synthesize: streamAudio,
                 consume: consumeAudio
             )

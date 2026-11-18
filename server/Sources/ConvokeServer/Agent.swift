@@ -1,4 +1,5 @@
 import Foundation
+import NIOCore
 import Vapor
 
 struct ChatMessage: Sendable, Equatable {
@@ -62,6 +63,7 @@ struct AgentConfig: Sendable {
 struct OpenAIChatAgent: Agent {
     let client: any Client
     let config: AgentConfig
+    let requestTimeout: TimeAmount
 
     private struct Request: Content {
         struct Message: Content { var role: String; var content: String }
@@ -88,6 +90,7 @@ struct OpenAIChatAgent: Agent {
         var headers = HTTPHeaders()
         if let key = config.apiKey { headers.bearerAuthorization = BearerAuthorization(token: key) }
         let response = try await client.post(URI(string: config.baseURL + "/chat/completions"), headers: headers) {
+            $0.timeout = requestTimeout
             try $0.content.encode(body, as: .json)
         }
         guard response.status == .ok else { throw AgentError.http(status: response.status.code) }
