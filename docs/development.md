@@ -2,9 +2,13 @@
 
 Developer-only. There is no authentication or TLS on the server or the app. Use a trusted tailnet and restrict access on the Mac (firewall, tailnet ACLs). Tailscale does not protect other reachable interfaces.
 
-This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification). [#30](https://github.com/markdlabrecque/convoke/issues/30) is closed at the owner's request after the [November 16 physical session](slice-4-30-device-session.md), with interruption/route checks deferred and missing failure-message discrepancies unresolved. Closure is not full acceptance of [epic #25](https://github.com/markdlabrecque/convoke/issues/25). The historical Mac cancellation blocker is superseded by the passing peer-observation correction below; the optional simulator engine failure remains unresolved. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
+This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification).
 
-For the Linux-hosted Hermes setup, see [Hermes](../server/README.md#hermes) and the [owner's live checklist](hermes-basic-check.md).
+## Current priority: finish the server and iOS app
+
+Finish the voice flow using the existing OpenAI-compatible chat endpoint (for example, Ollama). The [streaming bounds and cancellation evidence review](slice-4-27-verification.md#acceptance-evidence-review) separates software acceptance from device checks. [Slice 4](https://github.com/markdlabrecque/convoke/issues/25) is closed at the owner's request with exceptions, not fully accepted: real iPhone interruption and audio-route checks remain unverified, and physical server-loss and Kokoro-loss retests of the merged disconnect-message fix remain waived, not passed. See the [physical-device session](slice-4-30-device-session.md) for the original outcomes. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
+
+**Hermes integration is deferred.** The [basic setup](../server/README.md#hermes) ([#61](https://github.com/markdlabrecque/convoke/issues/61)), [live iPhone checklist](hermes-basic-check.md) ([#95](https://github.com/markdlabrecque/convoke/issues/95)), and [native contract and research](hermes-api-contract.md) ([#91](https://github.com/markdlabrecque/convoke/issues/91)) are retained for reference. None is required to finish or verify the server and iOS app.
 
 ## Requirements
 
@@ -95,7 +99,7 @@ CONVOKE_TEST_KOKORO_URL=http://127.0.0.1:8880 CONVOKE_KOKORO_VOICE=af_heart \
   swift test --package-path server --filter testKokoroSidecarSmoke
 ```
 
-That smoke uses a stub agent and proves non-silent source/wire PCM, not real agent generation or audible iPhone playback. For optional system-voice and real-engine commands, see the [Mac reproduction commands and results](#mac-follow-up-after-owner-authorized-ssh). Silent engine buffers are not acoustic evidence. The [historical Mac upstream cancellation failures](#cancellation-failure-details) are superseded by the hosted readable-peer result above. The [opt-in simulator audio initialization failure](#simulator-audio-initialization-blocker) remains unresolved; neither a server pass nor default Apple skips fix or waive it.
+That smoke uses a stub agent and proves non-silent source/wire PCM, not real agent generation or audible iPhone playback. For optional system-voice and real-engine commands, see the [Mac reproduction commands and results](#mac-follow-up-after-owner-authorized-ssh). Silent engine buffers are not acoustic evidence. The [historical Mac upstream cancellation failures](#cancellation-failure-details) are superseded by the hosted readable-peer result above. The [historical opt-in simulator initialization failure](#simulator-audio-initialization-blocker) did not reproduce in the later [passing simulator rerun](slice-4-27-verification.md#acceptance-evidence-review); neither that rerun nor default Apple CI establishes physical iPhone behavior.
 
 ### Current CI verification
 
@@ -241,7 +245,7 @@ The owner reported all three physical turns passing on November 12 2026 and conf
 
 ## Slice 4 streaming verification
 
-This is the #30 verification record for epic #25. Issue #30 is **closed at owner request**, not fully accepted. The [November 16 physical session and closure record](slice-4-30-device-session.md) supplies the current owner-reported results, source evidence, privacy confirmation and deferred work. The [physical table](#physical-checklist-and-results) below is consolidated; automated tables remain dated historical records, not newly rerun results. The Mac cancellation diagnosis was superseded by the [passing fixture correction](#passing-result-after-peer-observation-correction), not by Linux passes. Missing visible failure messages, deferred real interruption/route checks and the historical optional simulator failure remain visible.
+This is the #30 verification record for epic #25. Issue #30 is **closed at owner request**, not fully accepted. The [November 16 physical session and closure record](slice-4-30-device-session.md) supplies the current owner-reported results, source evidence, privacy confirmation and deferred work. The [physical table](#physical-checklist-and-results) below is consolidated; automated tables remain dated historical records, not newly rerun results. The Mac cancellation diagnosis was superseded by the [passing fixture correction](#passing-result-after-peer-observation-correction), not by Linux passes. The later [disconnect-message fix](https://github.com/markdlabrecque/convoke/issues/85) shipped, but the owner waived the physical server-loss and sidecar-loss retests. Real interruption and route checks remain deferred. See the [streaming evidence review](slice-4-27-verification.md#acceptance-evidence-review) for what the later simulator pass establishes.
 
 ### Initial Linux environment and provenance
 
@@ -397,7 +401,7 @@ A temporary sizes/content-free lifetime probe in `BodyPuller` showed its deiniti
 
 #### Simulator audio initialization blocker
 
-Opt-in tests exercise the real adapter only when `CONVOKE_TEST_AUDIO_ENGINE=1`. Xcode receives it through `TEST_RUNNER_CONVOKE_TEST_AUDIO_ENGINE=1`. The default suite deliberately skips them because it must remain usable without an audio route. An experimental app-hosted test runner also hit the same RPC timeout, so simply adding a test host did not solve it. Temporary project/host changes were reverted; no speculative runner change is included. A command-line host override also failed at linking and was discarded. The normal simulator build/test remains passing, while the opt-in simulator audio result remains Fail. It is not evidence of physical-device failure or success.
+Opt-in tests exercise the real adapter only when `CONVOKE_TEST_AUDIO_ENGINE=1`. Xcode receives it through `TEST_RUNNER_CONVOKE_TEST_AUDIO_ENGINE=1`. The default suite deliberately skips them because it must remain usable without an audio route. An experimental app-hosted test runner also hit the same RPC timeout, so simply adding a test host did not solve it. Temporary project/host changes were reverted; no speculative runner change is included. A command-line host override also failed at linking and was discarded. The normal simulator build/test passed and this historical opt-in run failed. A [later opt-in rerun](slice-4-27-verification.md#acceptance-evidence-review) passed all three tests. Neither run establishes physical-device interruption or route behavior.
 
 Mac logs are under `/tmp/convoke-30-mac-*.log`: `server-build`, `server-tests`, `cancellation-repeat`, `system-voice`, `server-final`, `ios-tests`, `ios-final`, `engine-tests`, `engine-repeat-{1,2,3}`, `simulator-build-final`, `simulator-default-final`, `simulator-final`, `simulator-hosted-final`, and `device-build-final`. They are local build/test diagnostics, not committed recordings. Inspecting service transcripts or device logs was not needed. The follow-up Linux log is `/tmp/convoke-30-portable-followup.log`. The selected simulator was Shutdown at completion, matching its initial state; other booted simulators were left alone.
 
@@ -471,7 +475,7 @@ The earlier Mac upstream cancellation result remains **Fail**, including all fiv
 
 #### Reduced owner work
 
-Do not repeat passing default builds just to fill this record. Resolve and rerun the Mac upstream-cancellation failure in separately authorized development work before Slice 4 acceptance; reproduce the opt-in simulator engine failure separately. The default script is not a replacement for either rerun. The remaining owner session uses the full physical table below, grouped here without dropping any row:
+This handoff predates the [passing Mac cancellation gate](#passing-result-after-peer-observation-correction) and [opt-in simulator rerun](slice-4-27-verification.md#acceptance-evidence-review). The default script is not a substitute for those checks or for physical evidence. The owner session used the full physical table below, grouped here without dropping any row:
 
 1. Record device/environment/revision provenance and privacy checks. Use real Ollama, pinned localhost-only Kokoro v0.10.0 and `af_heart`, with development services in Rex. No new service or other-machine change was authorized or made in this refresh.
 2. Observe early audible playback before genuine source EOF, startup delay, three untouched context-retaining turns and continuous ordered audio. Use the common-clock/causal-order method below; no silent-buffer or wire-chunk substitute.

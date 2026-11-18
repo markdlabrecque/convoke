@@ -6,7 +6,7 @@ Assessment for [issue 82](https://github.com/markdlabrecque/convoke/issues/82), 
 
 This assessment was accepted as research in issue 82 / PR 83, **not as installed capability**. The owner subsequently required unmodified official Hermes and withdrew core implementation approval for issues 78/84. The proposed core API and implementation specification below are preserved as historical findings only: no fork, core patch, private monkeypatch, overlay, custom build or plugin-delivered core replacement is authorized. T/R pins include local experimental code and must not be represented as official public plugin capabilities. Preserve existing experimental work for reference; do not resume, publish, deploy or clean it up.
 
-[Issue 87](https://github.com/markdlabrecque/convoke/issues/87) is the next bounded assessment of supported public plugin reporting to Convoke. It must cite official source separately, distinguish observable handler/cancellation events from physical settlement, and identify remaining admission/coverage gaps. It is not an implementation/install task or proof that a plugin can clear H0. See [the current contract](hermes-api-contract.md); issue 62 and runtime dependants remain blocked.
+[Issue 87's follow-up assessment](hermes-plugin-reporting-contract.md) examined supported public plugin reporting and the remaining admission and coverage gaps. It did not implement or install a plugin or clear H0. Hermes integration is now deferred; see the [current project priority](development.md#current-priority-finish-the-server-and-ios-app) and the [retained Hermes contract](hermes-api-contract.md).
 
 ## Historical recommendation — not current delivery authorization
 
