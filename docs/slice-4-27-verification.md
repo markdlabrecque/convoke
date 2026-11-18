@@ -1,5 +1,7 @@
 # Streaming bounds and failure handling
 
+Historical implementation snapshot. Pending and blocked results below describe this revision/environment, not current acceptance. See the [later automated evidence](development.md#automated-checks) and [November 16 physical session and #30 closure](slice-4-30-device-session.md). The five Mac cancellation assertions were resolved by a fixture correction; physical failure-message discrepancies and deferred interruption/route checks remain. Issue #30 closure does not complete #27 or epic #25.
+
 Implementation for [issue 27](https://github.com/markdlabrecque/convoke/issues/27), based on main at `4ce682b`, branch `slice-4-27`. This is not physical acceptance for Slice 4.
 
 ## Bounds and cancellation

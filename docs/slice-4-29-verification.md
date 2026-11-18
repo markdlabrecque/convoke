@@ -1,5 +1,7 @@
 # Slice 4 deterministic regression verification
 
+Historical implementation snapshot. Statements below that #30 is idle or hardware checks are Pending apply to this implementation run. See the [later automated evidence](development.md#automated-checks) and [November 16 physical session and closure](slice-4-30-device-session.md) for subsequent results. Issue #30 is closed at owner request with real interruption/route checks deferred and visible failure-message discrepancies unresolved, not fully accepted. Deterministic fixtures remain distinct from physical evidence.
+
 ## Base and scope
 
 Implements #29 against the full approved plan and Q&A on #25. Fetched origin, then created `slice-4-29` in the existing `code/main` checkout from `origin/main` at `1dd4b1c85bbe5c9950858b3546d0b86fd864ad5f`.

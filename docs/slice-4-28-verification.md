@@ -1,5 +1,7 @@
 # Slice 4 lifecycle implementation verification
 
+Historical implementation snapshot. Pending and blocked results below describe this revision/environment, not current acceptance. See the [later automated evidence](development.md#automated-checks) and [November 16 physical session](slice-4-30-device-session.md) for owner-reported End, background, Disconnect and underrun results. Issue #30 is closed by owner decision; real interruption/route checks remain deferred and missing failure messages remain discrepancies. Full Slice 4 acceptance is not complete.
+
 ## Scope and base
 
 Implements issue #28 after #27, following the approved plan and Q&A on epic #25. Branch `slice-4-28` was created in the existing `code/main` checkout from fetched `origin/main` at `05e7ed2`, the merged PR #33 commit. `git merge-base --is-ancestor 05e7ed2 origin/main` exited 0.

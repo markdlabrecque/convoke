@@ -2,7 +2,7 @@
 
 Developer-only. There is no authentication or TLS on the server or the app. Use a trusted tailnet and restrict access on the Mac (firewall, tailnet ACLs). Tailscale does not protect other reachable interfaces.
 
-This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification), tracked by #30 under epic #25. Streaming TTS is now implemented; its acceptance is blocked by the [Mac follow-up failures](#mac-follow-up-after-owner-authorized-ssh) and pending physical checks. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
+This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification). [#30](https://github.com/markdlabrecque/convoke/issues/30) is closed at the owner's request after the [November 16 physical session](slice-4-30-device-session.md), with interruption/route checks deferred and missing failure-message discrepancies unresolved. Closure is not full acceptance of [epic #25](https://github.com/markdlabrecque/convoke/issues/25). The historical Mac cancellation blocker is superseded by the passing peer-observation correction below; the optional simulator engine failure remains unresolved. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
 
 ## Requirements
 
@@ -63,7 +63,7 @@ See the implemented [Linux workflow](../.github/workflows/swift-linux.yml), [Mac
 
 The initial production-lifetime hypothesis was not supported: explicit request cancellation also failed the same five assertions in [run 43994565066](https://github.com/markdlabrecque/convoke/actions/runs/43994565066). That production experiment was fully reverted. The actual correction in [PR #59](https://github.com/markdlabrecque/convoke/pull/59), merged as `99530fd04bb7f75266933c9cecedaa6a1abad066`, is fixture-only: disable pipelining assistance on the single-request upstream peer. SwiftNIO's `HTTPServerPipelineHandler` suppresses reads while `.responseEndPending`; this fixture deliberately leaves its response unfinished, preventing Darwin from observing the TCP close. Keeping reads enabled restores observation; it does not fulfill the expectation or close the fixture artificially. Production code is unchanged. A local Linux negative control that deliberately retained the open request still failed the unchanged close assertion after three seconds (exit 1); the mutation was restored and is not committed. Restored full Linux suite: 53 tests, 1 optional skip, 0 failures.
 
-This supersedes the earlier attribution of these five timeouts to a proven production cancellation defect. It does not retrospectively change historical runs, fix the optional simulator engine issue, or close #27/#30 acceptance. The gate's final post-rebase SHA still requires its own passing CI before merge.
+This supersedes the earlier attribution of these five timeouts to a proven production cancellation defect. It does not retrospectively change historical runs, fix the optional simulator engine issue, or complete #27/Slice 4 acceptance. The gate subsequently merged; the owner-session handoff records passing post-merge main [run 43998453989](https://github.com/markdlabrecque/convoke/actions/runs/43998453989) at runtime `ef74132`. The separate [#30 closure and physical results](slice-4-30-device-session.md) retain all deferred checks and discrepancies.
 
 #### Initial failed run (retained historical evidence)
 
@@ -114,12 +114,12 @@ Record date, tested SHA and dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, agent
 
 | Check | Expected outcome | Result |
 | --- | --- | --- |
-| Sequential audible turns | Three complete replies without touching the phone between turns; no missing/repeated/reordered audio; listening resumes only after the final playback sample | Pending |
-| End before and after EOF/done | Before validated done, End stops audio/capture and disconnects. After done but before queued playback drains, End stops audio and keeps Ready; Start works. No stale callback restarts capture/playback | Pending |
-| Lifecycle and audio session | Exercise background, Disconnect, a real interruption and a route/configuration change. Audio/capture stop, expected disconnect/error appears, no automatic restart | Pending |
-| Streaming behavior changes | Long real Kokoro reply starts audibly before real source EOF and remains continuous. Use the [Slice 4 observation method and limits](#owner-handoff-mac-and-iphone); network frames or silent callbacks alone are insufficient | Pending |
+| Sequential audible turns | Three complete replies without touching the phone between turns; no missing/repeated/reordered audio; listening resumes only after the final playback sample | Pass, owner-reported November 16 session; no direct final-sample instrumentation |
+| End before and after EOF/done | Before validated done, End stops audio/capture and disconnects. After done but before queued playback drains, End stops audio and keeps Ready; Start works. No stale callback restarts capture/playback | Pass, both owner-reported windows with source observations |
+| Lifecycle and audio session | Exercise background, Disconnect, a real interruption and a route/configuration change. Audio/capture stop, expected disconnect/error appears, no automatic restart | Partial: background and Disconnect Pass; interruption and route/configuration Pending, deferred |
+| Streaming behavior changes | Long real Kokoro reply starts audibly before real source EOF and remains continuous. Use the [session observation method and limits](slice-4-30-device-session.md#genuine-early-playback); network frames or silent callbacks alone are insufficient | Pass for early sound, continuity and controlled underrun in the November 16 session |
 
-This is an ongoing smoke checklist, not a replacement for the initial full [Slice 4 acceptance](#physical-checklist-and-results) in [#30](https://github.com/markdlabrecque/convoke/issues/30) under [#25](https://github.com/markdlabrecque/convoke/issues/25). Both remain open. All original failed/unrun rows below remain unchanged; current CI does not retrospectively pass them.
+This is an ongoing smoke checklist, not a replacement for full [Slice 4 acceptance](#physical-checklist-and-results). Results above describe the [November 16 session](slice-4-30-device-session.md), not a standing pass for future revisions. [#30](https://github.com/markdlabrecque/convoke/issues/30) is closed by owner decision with work deferred; [#25](https://github.com/markdlabrecque/convoke/issues/25) remains open. Historical failed/unrun automated rows below retain their original provenance; neither current CI nor this session retrospectively passes them.
 
 ### Recorded automated results
 
@@ -239,7 +239,7 @@ The owner reported all three physical turns passing on November 12 2026 and conf
 
 ## Slice 4 streaming verification
 
-This is the #30 verification record for epic #25. It does not replace the historical tables above. Acceptance is **blocked**, not complete. Automated results below were rerun; earlier #27/#28/#29 counts are not relabeled as current results. The initial Linux snapshot is followed by an authorized Mac run. Read both, especially the Mac cancellation failures; Linux passes do not override them.
+This is the #30 verification record for epic #25. Issue #30 is **closed at owner request**, not fully accepted. The [November 16 physical session and closure record](slice-4-30-device-session.md) supplies the current owner-reported results, source evidence, privacy confirmation and deferred work. The [physical table](#physical-checklist-and-results) below is consolidated; automated tables remain dated historical records, not newly rerun results. The Mac cancellation diagnosis was superseded by the [passing fixture correction](#passing-result-after-peer-observation-correction), not by Linux passes. Missing visible failure messages, deferred real interruption/route checks and the historical optional simulator failure remain visible.
 
 ### Initial Linux environment and provenance
 
@@ -401,7 +401,7 @@ Mac logs are under `/tmp/convoke-30-mac-*.log`: `server-build`, `server-tests`, 
 
 ### Completed-harness refresh, November 15, 2026
 
-This follow-up for [#42](https://github.com/markdlabrecque/convoke/issues/42) applies the completed [#38](https://github.com/markdlabrecque/convoke/issues/38) automation to Slice 4. It adds fresh software evidence, not physical acceptance. [#30](https://github.com/markdlabrecque/convoke/issues/30) and [#25](https://github.com/markdlabrecque/convoke/issues/25) remain open. All historical tables, including the Mac failures above, are preserved.
+Historical November 15 snapshot: this follow-up for [#42](https://github.com/markdlabrecque/convoke/issues/42) applies the completed [#38](https://github.com/markdlabrecque/convoke/issues/38) automation to Slice 4. It added software evidence, not physical acceptance; #30 and #25 were open at that time. All Pending/Fail statements within this refresh describe that date, not current status. For later Mac cancellation resolution, physical passes and owner-directed #30 closure, see the [November 16 session record](slice-4-30-device-session.md). Historical tables are preserved.
 
 #### Revision and evidence inspected
 
@@ -480,7 +480,9 @@ All eleven physical rows remain Pending. This evidence refresh can complete inde
 
 ### Owner handoff: Mac and iPhone
 
-The agent has now performed the available Mac builds and tests above. The remaining owner session is for the physical rows, after the cancellation failure is resolved; the commands below are retained for reproduction, not a request to repeat passing builds. Owner participation is required in this T3 thread. Do not mark #30 or epic #25 complete from the Linux results. Record owner-reported checks explicitly as **owner-reported**, with date, tested SHA, dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, Ollama model, image digest and voice. Leave every unrun or inconclusive row Pending. Mac checkout updates and tests above were performed only after the owner explicitly authorized SSH. Pre-existing services were preserved.
+The original handoff procedure below is retained for future reproduction, not as a request to repeat passing builds or as a description of current service state. The [November 16 session](slice-4-30-device-session.md) completed most physical rows after Mac cancellation verification passed. Issue #30 was then closed by owner decision with the remaining checks deferred, not accepted. Any resumed session must record its own environment and preserve existing failures/Pending rows until actually resolved.
+
+Record owner-reported checks explicitly as **owner-reported**, with date, tested SHA, dirty-tree state, Mac/macOS/Xcode, iPhone/iOS, Ollama model, image digest and voice. Leave every unrun or inconclusive row Pending. The earlier Mac checkout updates were performed only after owner-authorized SSH; preservation of pre-existing services in that historical run does not describe the later failure-test restarts.
 
 1. On the Mac, obtain this PR branch and record `git rev-parse HEAD` and `git status --short`. Run `sw_vers`, `xcodebuild -version`, `swift --version`, `docker version --format '{{.Server.Version}}'`. Fill in the actual phone model/iOS from Settings. Do not reuse the #23 environment without reconfirming it.
 2. From repo root run the following Apple checks. Select an installed simulator from the listing; substitute its actual UDID for the shell variable before the final test command. Report exit status, tests/skips/failures and the build-success markers, without saving content-bearing device console output.
@@ -503,25 +505,25 @@ The agent has now performed the available Mac builds and tests above. The remain
 
 3. In separate Rex terminals start the pinned localhost CPU sidecar using `server/README.md`, Ollama with the actual installed `llama3.2` model, and Convoke with explicit `CONVOKE_AGENT_BASE_URL=http://localhost:11434/v1`, `CONVOKE_AGENT_MODEL=llama3.2`, `CONVOKE_KOKORO_URL=http://127.0.0.1:8880`, `CONVOKE_KOKORO_VOICE=af_heart`. Repeat the opt-in smoke above and record the digest and binding. Install the updated signed app through Xcode on the physical phone, then connect over the trusted tailnet. Unsigned build alone is not an installed-device test.
 4. Run the physical rows below. For early playback, request a sufficiently long real reply. Use sizes/timings-only diagnostics or non-stopping debugger tracepoints to observe source EOF and playback start; do not inspect or persist text/PCM. Existing smoke diagnostics cover source and wire, not physical output. The normal app/server do not currently emit a paired runtime playback-start/source-EOF timing report. A debug observation setup is still needed. The successful EOF branch of `BodyPuller.next()` in `server/Sources/ConvokeServer/KokoroSpeechSynthesizer.swift` is the source-EOF observation point; a probe must auto-continue without printing request data or delaying the producer. If using separate Mac/phone timers, their raw timestamps cannot be compared. Use a common monotonic observation clock or explicit causal ordering, and describe the method and uncertainty. For example, an owner hearing the first sound while a live non-stopping source-EOF probe still shows synthesis active establishes ordering; record startup delay using that same observer's timer from turn submission. If EOF is too close to distinguish, keep early playback Pending. An AVAudioPlayerNode start callback or network frame alone is not proof of audible output. Do not pause or artificially gate real Kokoro EOF to manufacture an early-playback pass.
-5. Return the environment, per-row Pass/Fail/Pending, startup delay and ordering method in this thread. Report failures before retrying, including whether audio/capture stopped. Keep transcripts, arbitrary response bodies, audio and screen/audio recordings out of the report. Stop development services afterward.
+5. Return the environment, per-row Pass/Fail/Pending, startup delay and ordering method in the active acceptance record. Report failures before retrying, including whether audio/capture stopped. Keep transcripts, arbitrary response bodies, audio and screen/audio recordings out of the report. Stop temporary test services and restore the ordinary development configuration, preserving pre-existing services unless explicitly authorized otherwise.
 
 ### Physical checklist and results
 
-All rows are Pending. There has been no owner device report for this branch. Controller and queue test passes do not change these rows.
+Current results are from the [November 16, 2026 MST physical session](slice-4-30-device-session.md) on runtime `ef74132`, not inferred from controller/queue tests. Audio/UI behavior is owner-reported; source/service observations are distinguished in that record. Issue #30 is closed at the owner's request with remaining work deferred. Full Slice 4 acceptance is not complete.
 
 | Check | Procedure and required evidence | Result |
 | --- | --- | --- |
-| Early audible playback | Long real Ollama reply, `af_heart`; actual sound before real source EOF. Record common-clock duration or explicit ordering and observed startup delay, not network chunk count | Pending |
-| Three untouched hands-free turns | Start once, let three replies finish, use earlier context in a follow-up. Report retained context without quoting it. Listening resumes only after validated done and the last played sample | Pending |
-| Continuity | During normal trusted-tailnet turns, no missing, repeated, reordered audio or audible gaps | Pending |
-| End before done | During playback while EOF is still pending, tap End. Audio/capture stop and connection closes; no later callback restarts them | Pending |
-| End after done before drain | With validated done observed and queued audio still playing, tap End. Audio stops, connection remains Ready; Start works without reconnecting | Pending |
-| Temporary underrun | Hold later source data with the deterministic fixture, let the queue drain, then release. Same reply resumes in order, mic stays off until EOF plus drain | Pending |
-| Mid-stream source/server failure | Stop the local sidecar during active generation, and separately stop Convoke during playback. Error visible, playback/capture stop, no macOS fallback, retry or automatic restart | Pending |
-| Background | Background during buffering/playback. Audio/capture stop and connection closes; no late callback restart | Pending |
-| Disconnect | Tap Disconnect during playback. Everything stops, no automatic reconnect or restart | Pending |
-| Audio interruption/configuration change | Exercise a real iOS audio interruption and route/engine configuration change. Playback/capture stop, visible error/disconnect, no stale callback restart | Pending |
-| Privacy | Inspect only content-free diagnostics. No persisted transcript/audio or content logging introduced during verification | Pending |
+| Early audible playback | Long real Ollama reply, `af_heart`; actual sound before genuine source EOF; common-clock ordering and startup delay | Pass. Owner first-sound marker 27.523887 s before source EOF; approximate manual submission-to-sound 10.559367 s. No artificial delay or latency SLA |
+| Three untouched hands-free turns | Three full replies, earlier context retained, Listening after validated done plus final sample | Pass, owner-reported audio/UI. No independent done/final-sample callback tracing |
+| Continuity | No missing, repeated, reordered audio or normal-condition gaps | Pass, owner-reported |
+| End before done | End during playback before EOF stops audio/capture, disconnects, no late restart | Pass, owner-reported, paired with no successful source EOF through the End observation; explicit Connect recovers |
+| End after done before drain | End while still playing stops audio, keeps Ready; Start without reconnecting | Pass, owner-reported. Genuine source EOF before End; Ready and Start-without-Connect establish post-done controller path |
+| Temporary underrun | Explicit test-only delivery gate drains then replenishes queue; same reply resumes, mic stays off | Pass, owner-reported. One second forwarded, ten-second delivery hold, about nine seconds audible silence while Playing; normal resume/follow-up. Physical gate timings not retained |
+| Mid-stream source/server failure | Separate actual sidecar and server failures; error visible, audio/capture stop, no fallback/restart | **Fail overall, both subcases.** Stop/disconnect, no automatic restart/fallback and explicit recovery pass; owner saw only Disconnected, no failure explanation |
+| Background | Home during playback stops audio/capture and closes connection; no restart | Pass, owner-reported, including background/foreground waits and explicit recovery |
+| Disconnect | Disconnect during playback stops everything, no automatic reconnect/restart | Pass, owner-reported, including explicit recovery |
+| Audio interruption/configuration change | Separate real interruption and route/engine configuration change | **Pending, both deferred.** Interruption unavailable; headphone connection did not move playback off phone, so no active-route disconnect test completed |
+| Privacy | Content-free diagnostics; no introduced transcript/audio storage or content logging | Pass for this session. Technical review plus owner confirmation of no recordings, saved transcripts, body captures or extra content logging; not an OS/third-party forensic audit |
 
 For reproducible delayed-stream logic, the existing deterministic fixtures run without models or hardware:
 
@@ -536,4 +538,4 @@ These are test-only injected fixtures, not a runnable server mode for a physical
 
 ## Reporting
 
-Copy this document into the PR or ticket with the Result and results-table columns filled in. Slice acceptance is complete only when every automated row and every checklist row is `Pass`. A `Fail` or an unrun row must stay visible; do not edit expected results to match observed behavior.
+Link the dated evidence and consolidated results from the PR or ticket. Slice acceptance is complete only when every required automated and physical row is `Pass`. A `Fail` or an unrun row must stay visible; do not edit expected results to match observed behavior. Administrative issue closure, including the owner's closure of #30 with work deferred, does not satisfy those acceptance criteria.
