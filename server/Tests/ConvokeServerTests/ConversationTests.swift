@@ -17,8 +17,9 @@ struct EchoTestAgent: Agent {
 final class ConversationTests: XCTestCase {
     func testPrefixAndTrimmedUTF8Limit() throws {
         XCTAssertEqual(try reply(" \n hello 🌍 \t"), "hello 🌍")
-        XCTAssertNoThrow(try reply(String(repeating: "é", count: 2048)))
-        XCTAssertThrowsError(try reply(String(repeating: "é", count: 2049)))
+        let boundary = String(repeating: "é", count: 8_192) // 16,384 UTF-8 bytes
+        XCTAssertEqual(try reply(boundary).utf8.count, 16_384)
+        XCTAssertThrowsError(try reply(boundary + "a")) // 16,385 bytes
         for text in ["", " \n\t "] { XCTAssertThrowsError(try reply(text)) }
     }
 

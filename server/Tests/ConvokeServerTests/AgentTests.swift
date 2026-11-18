@@ -75,7 +75,7 @@ final class AgentTests: XCTestCase {
                 "CONVOKE_AGENT_BASE_URL": "http://127.0.0.1:\(port)/v1", "CONVOKE_AGENT_MODEL": "test-model",
                 "CONVOKE_AGENT_API_KEY": "secret",
             ])
-            try await run(OpenAIChatAgent(client: app.client, config: config))
+            try await run(OpenAIChatAgent(client: app.client, config: config, requestTimeout: .seconds(120)))
             await app.server.shutdown()
             try await app.asyncShutdown()
         } catch {

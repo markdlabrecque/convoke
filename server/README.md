@@ -8,13 +8,15 @@ For project language, see the [glossary](../GLOSSARY.md) and [domain model](../d
 
 Use a Mac running macOS 13 or later with Swift 6.4 or later, plus either the Docker Kokoro sidecar below or an installed system speech voice. The committed dependency resolution currently requires Swift 6.4.
 
-Set the agent first. The server will not start without these:
+Set the agent base URL and model first. The server will not start without them:
 
 | Variable | Meaning |
 | --- | --- |
 | `CONVOKE_AGENT_BASE_URL` | Endpoint base, up to and including `/v1`. The server posts to `<base>/chat/completions`. |
 | `CONVOKE_AGENT_MODEL` | Model name sent in each request. |
 | `CONVOKE_AGENT_API_KEY` | Optional. Sent as a Bearer token. |
+| `CONVOKE_BIND_HOST` | Optional. Defaults to `127.0.0.1` (loopback) when unset or blank. |
+| `CONVOKE_TURN_TIMEOUT_SECONDS` | Optional. Whole-turn deadline in seconds. Defaults to `120`; if set, it must be an integer from `10` to `3600` or startup fails. |
 
 ```sh
 # Ollama (ollama serve; ollama pull llama3.2)
@@ -30,9 +32,9 @@ swift run ConvokeServer serve
 PORT=9090 swift run ConvokeServer serve
 ```
 
-Connect to `ws://<Mac-Tailscale-address>:8080/conversation`.
+Connect locally at `ws://127.0.0.1:8080/conversation`. For direct phone access, set `CONVOKE_BIND_HOST` to the Mac's numeric tailnet address before starting the server, then connect to `ws://<Mac-Tailscale-address>:8080/conversation`.
 
-The server binds `0.0.0.0` and has **no application authentication or TLS**. Restrict access with the Mac's firewall and tailnet ACLs. Tailscale does not protect other reachable interfaces. Do not expose this server to untrusted networks.
+The loopback default keeps the server local. The server has **no application authentication or TLS**. If you override the bind host, restrict access with the Mac's firewall and tailnet ACLs. Tailscale does not protect other reachable interfaces. Do not expose this server to untrusted networks.
 
 ## Linux
 
@@ -83,7 +85,7 @@ The iPhone receives while playing on one audio engine per reply. It starts at 96
 
 End conversation before validated done stops playback and disconnects to cancel unfinished server work. After done, End stops queued playback but can keep the connection ready. Backgrounding, disconnect and audio interruption stop capture/playback; stale callbacks cannot restart them. There is no barge-in, automatic reconnect or voice fallback.
 
-Limits are 4096 UTF-8 bytes of trimmed input, 32768 UTF-8 bytes per JSON message, 16384 decoded bytes per audio chunk, and 8 MiB of accumulated PCM per turn. Fragmented incoming messages share the same 32768-byte limit. A turn has a 120-second deadline, including synthesis and writes. Invalid input, binary messages, overlapping turns, conversion or synthesis errors, oversized audio, and timeouts close the connection. A synthesis failure after some audio was sent closes the connection (1011) without `agent.done`; the 8 MiB cap is enforced as audio arrives. A close handshake has a one-second deadline, after which TCP is forcibly closed even if the peer does not acknowledge or a write is stalled. No further application or ping messages are processed while closing. Client frames must be masked and must not set reserved bits, since no extensions are negotiated. A disconnect, failed socket write or turn deadline cancels synthesis, including the actual upstream Kokoro HTTP request, and releases the conversation. The deadline stays active through the final done write. Cancellation and partial failures cannot send successful done or later audio after closure. Reconnecting starts a new session; interrupted turns are not resumed.
+Limits are 16384 UTF-8 bytes of trimmed input, 32768 UTF-8 bytes per JSON message, 16384 decoded bytes per audio chunk, and 8 MiB of accumulated PCM per turn. Fragmented incoming messages share the same 32768-byte limit. The deadline covers the whole turn, including the agent request, synthesis and socket writes. It defaults to 120 seconds and is configurable with `CONVOKE_TURN_TIMEOUT_SECONDS`. Invalid input, binary messages, overlapping turns, conversion or synthesis errors, oversized audio, and timeouts close the connection. A synthesis failure after some audio was sent closes the connection (1011) without `agent.done`; the 8 MiB cap is enforced as audio arrives. A close handshake has a one-second deadline, after which TCP is forcibly closed even if the peer does not acknowledge or a write is stalled. No further application or ping messages are processed while closing. Client frames must be masked and must not set reserved bits, since no extensions are negotiated. A disconnect, failed socket write or turn deadline cancels synthesis, including the actual upstream Kokoro HTTP request, and releases the conversation. The deadline stays active through the final done write. Cancellation and partial failures cannot send successful done or later audio after closure. Reconnecting starts a new session; interrupted turns are not resumed.
 
 Transcripts and audio stay in memory. The application neither writes them to disk nor logs transcript content. Each connection keeps its own history in memory (the last 40 messages) and drops it on disconnect. Logs carry sizes and status codes, never transcript or reply text. If the endpoint is unreachable, returns an error, or sends an empty reply, the server logs the reason and closes the connection with WebSocket code 1011 (server error). It never falls back to an echo. Kokoro voice selection uses `CONVOKE_KOKORO_VOICE`. Agent text generation is not streamed; Kokoro audio is.
 
