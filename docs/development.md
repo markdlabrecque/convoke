@@ -147,7 +147,7 @@ Simulator tests were subsequently executed locally on 2026-11-11 at 23:00 MST ag
 
 Run on the physical iPhone against the Mac server, after the automated checks. Every row starts as Pending. Record the date, iPhone model, iOS version, Mac/Xcode version, commit SHA, and per-row result. Never paste transcript text or audio into notes; describe outcomes only (for example "second turn played").
 
-The owner confirms that all 23 physical-device checklist checks passed, including the 11 detailed checks not covered by the initial grouped report. All physical results below are owner-reported, not independently observed by the coding agent. All five required Mac automated checks, including simulator execution, also passed as recorded above. All required checklist rows are now Pass. The voice backend used for the physical session remains unconfirmed.
+The owner reported that all 23 physical-device checks passed in the November 11 session, including the 11 detailed checks not covered by the initial grouped report. These results were not independently observed by the coding agent. All five required Mac automated checks, including simulator execution, also passed as recorded above. Rows 11, 12 and 22 are Pending at the new limits; their earlier passes were at 60 seconds and 4096 UTF-8 bytes. The voice backend used for the physical session remains unconfirmed.
 
 Recorded test environment:
 
@@ -181,8 +181,8 @@ Result column: `Pending`, `Pass` or `Fail`, with notes.
 | 8 | Stay silent before speaking for 10 s or more | No submission and no silence countdown until speech is heard | Pass |
 | 9 | Wait for the full reply | Complete reply plays, then status returns to Listening without touching the phone | Pass, owner-reported physical-device check |
 | 10 | Complete at least three consecutive turns without touching the phone | Each turn is sent, answered and played; the agent has context from earlier turns | Pass, owner-reported physical-device check |
-| 11 | Keep talking for more than 60 s | The turn is submitted at the 60 s limit (note whether any words were sent) | Pass |
-| 12 | Stay silent for 60 s | Nothing is sent; the app keeps listening, no error | Pass |
+| 11 | Keep talking for more than 300 s without a silence timeout; stay within 16384 UTF-8 bytes | The turn is submitted at the 300 s limit (record whether text was sent, not the text) | Pending (earlier pass at 60 s) |
+| 12 | Stay silent through the 300 s capture limit | Nothing is sent; the app keeps listening, no error | Pending (earlier pass at 60 s) |
 | 13 | Confirm there is no Submit button and no volatile/partial text is sent (compare spoken words with the agent's reaction) | Only finalized words are submitted | Pass |
 
 ### End conversation
@@ -202,7 +202,7 @@ Result column: `Pending`, `Pass` or `Fail`, with notes.
 | 19 | Stop the server while Listening or Playing | Visible connection error; app shows Disconnected; no automatic reconnect | Pass |
 | 20 | Background the app during a conversation | Capture and playback stop and the connection closes; no background audio | Pass, owner-reported physical-device check |
 | 21 | Tap Disconnect during a conversation | Everything stops; status Disconnected | Pass, owner-reported physical-device check |
-| 22 | Speak a very long turn if possible (over 4096 UTF-8 bytes) | "That was too long to send" appears and listening continues; nothing is sent | Pass |
+| 22 | Speak a very long turn if possible (over 16384 UTF-8 bytes within 300 s) | "That was too long to send" appears and listening continues; nothing is sent | Pending (earlier pass at 4096 UTF-8 bytes) |
 | 23 | Review the Xcode device console and server log after a session | No transcript or reply text and no audio in either log | Pass |
 
 ## Kokoro verification

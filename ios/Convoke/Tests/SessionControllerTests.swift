@@ -129,31 +129,35 @@ final class SessionControllerTests: XCTestCase {
     func testUTF8LimitAndEscapedFrameLimit() async {
         makeSession()
         await connect()
-        for value in [String(repeating: "👋", count: 1025), String(repeating: "x", count: 4097)] {
-            speech.text = value
+        let atLimit = String(repeating: "👋", count: 4096) // Four UTF-8 bytes each.
+        let rejected = [
+            (String(repeating: "x", count: 16385), "Recognized text exceeds 16384 UTF-8 bytes"),
+            (atLimit + "x", "Recognized text exceeds 16384 UTF-8 bytes"),
+            // 8192 UTF-8 bytes, but each control character expands to six JSON bytes.
+            (String(repeating: "\u{01}", count: 8192), "Outgoing frame exceeds 32768 UTF-8 bytes"),
+        ]
+        for (text, diagnostic) in rejected {
+            speech.text = text
             await session.startCapture()
             await session.submitCapture()
             XCTAssertEqual(session.state, .ready)
+            XCTAssertTrue(transport.sent.isEmpty)
+            XCTAssertEqual(session.errorMessage, "That was too long to send. Try a shorter turn.")
+            XCTAssertEqual(logs.last, diagnostic)
         }
-        XCTAssertTrue(transport.sent.isEmpty)
-        speech.text = String(repeating: "\u{01}", count: 4096)
+        speech.text = atLimit
         await session.startCapture()
         await session.submitCapture()
         XCTAssertEqual(session.state, .waiting)
-        XCTAssertLessThanOrEqual(transport.sent[0].utf8.count, 32768)
-        session.disconnect()
-        await connect()
-        speech.text = String(repeating: "👋", count: 1024)
-        await session.startCapture()
-        await session.submitCapture()
-        XCTAssertEqual(transport.sent.count, 2)
+        XCTAssertEqual(transport.sent.count, 1)
     }
 
     func testTimeoutSubmitsOnce() async {
         makeSession()
         await connect()
         await session.startCapture()
-        XCTAssertEqual(timer.seconds, 60)
+        XCTAssertEqual(timer.seconds, 300)
+        speech.onSpeech?()
         let sent = expectation(description: "Timeout sends a frame")
         transport.onSend = { sent.fulfill() }
         timer.fire()
@@ -381,7 +385,7 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertTrue(session.isConversationActive)
         XCTAssertEqual(session.state, .recording)
         XCTAssertEqual(session.statusText, "Listening")
-        XCTAssertEqual(timer.seconds, 60)
+        XCTAssertEqual(timer.seconds, 300)
         // No speech yet: no silence countdown, so nothing can submit.
         XCTAssertNil(silence.action)
         speech.onSpeech?()

@@ -3,7 +3,7 @@ import ConvokeCore
 import Speech
 
 /// On-device capture with SpeechAnalyzer and SpeechTranscriber (iOS 26+).
-/// Audio never leaves the device. Silence and the 60-second limit are decided
+/// Audio never leaves the device. Silence and the capture limit are decided
 /// by `SessionController`; this adapter reports speech activity, then
 /// finalizes within a deadline and never substitutes partial text.
 @available(iOS 26.0, macOS 26.0, *)
