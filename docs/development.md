@@ -4,6 +4,8 @@ Developer-only. There is no authentication or TLS on the server or the app. Use 
 
 This guide keeps the historical slice 3 checks and #23 complete-reply Kokoro baseline separate from [Slice 4 streaming verification](#slice-4-streaming-verification). [#30](https://github.com/markdlabrecque/convoke/issues/30) is closed at the owner's request after the [November 16 physical session](slice-4-30-device-session.md), with interruption/route checks deferred and missing failure-message discrepancies unresolved. Closure is not full acceptance of [epic #25](https://github.com/markdlabrecque/convoke/issues/25). The historical Mac cancellation blocker is superseded by the passing peer-observation correction below; the optional simulator engine failure remains unresolved. Barge-in, agent-text streaming, sentence splitting, background calls, CallKit, reconnect/resume, authentication, transcript storage, manual Submit and cloud recognition fallback remain out of scope.
 
+For the Linux-hosted Hermes setup, see [Hermes](../server/README.md#hermes) and the [owner's live checklist](hermes-basic-check.md).
+
 ## Requirements
 
 - A Mac with Xcode that supports iOS 26 and macOS 26 SDKs, plus `xcodegen` if the project configuration changes.
