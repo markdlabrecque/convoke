@@ -1,6 +1,6 @@
 # Basic Hermes integration: owner live checklist
 
-**Untested.** Run this on a physical iPhone only during the separately authorized [owner live check](https://github.com/markdlabrecque/convoke/issues/95). Follow the [Hermes setup](../server/README.md#hermes) on the Linux development machine, using the existing Hermes configuration and the Kokoro sidecar. Use harmless, non-sensitive utterances; Hermes shares memory with the main agent and may retain conversation history. Record outcomes and timings only, not transcripts, audio, keys, or network identifiers. Leave unrun or inconclusive rows Pending.
+**Deferred and untested.** This checklist is retained for reference only. Do not run it as part of [server and iOS completion](development.md#current-priority-finish-the-server-and-ios-app). If the [owner live check](https://github.com/markdlabrecque/convoke/issues/95) is separately resumed, run it on a physical iPhone. Follow the [Hermes setup](../server/README.md#hermes) on the Linux development machine, using the existing Hermes configuration and the Kokoro sidecar. Use harmless, non-sensitive utterances; Hermes shares memory with the main agent and may retain conversation history. Record outcomes and timings only, not transcripts, audio, keys, or network identifiers. Leave unrun or inconclusive rows Pending.
 
 | Procedure | Expected | Result |
 | --- | --- | --- |

@@ -2,7 +2,9 @@
 
 Source/document assessment for [issue 87](https://github.com/markdlabrecque/convoke/issues/87), under [epic 61](https://github.com/markdlabrecque/convoke/issues/61). **No plugin/receiver implementation, installation or runtime acceptance.** Bounded 6h human-equivalent scope: reuse/source mapping 2h, reporting/recovery contract 2h, recommendation/review 2h.
 
-## Decision for review
+**Status:** Hermes integration is deferred. This assessment is retained for reference; see the [current project priority](development.md#current-priority-finish-the-server-and-ios-app).
+
+## Assessment findings
 
 **GO for the usefulness of best-effort diagnostic observations; NO-GO for using those observations as recoverable admission, all-work settlement, lease release or H0 acceptance.** This is a feasibility judgment, not authorization to build or enable telemetry. On the inspected official public surface, a plugin can observe selected tool/turn/subagent boundaries and export bounded facts. It cannot attest complete ownership before effects, fence every producer, or join all caused resources. A trace with matching starts/ends is not a closure certificate; an empty trace is not proof of no work.
 

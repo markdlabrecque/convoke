@@ -1,8 +1,19 @@
 # Streaming bounds and failure handling
 
-Historical implementation snapshot. Pending and blocked results below describe this revision/environment, not current acceptance. See the [later automated evidence](development.md#automated-checks) and [November 16 physical session and #30 closure](slice-4-30-device-session.md). The five Mac cancellation assertions were resolved by a fixture correction; physical failure-message discrepancies and deferred interruption/route checks remain. Issue #30 closure does not complete #27 or epic #25.
+Implementation for [issue 27](https://github.com/markdlabrecque/convoke/issues/27), based on main at `4ce682b`, branch `slice-4-27`. Pending and blocked results in the historical Linux snapshot describe that revision, not current acceptance.
 
-Implementation for [issue 27](https://github.com/markdlabrecque/convoke/issues/27), based on main at `4ce682b`, branch `slice-4-27`. This is not physical acceptance for Slice 4.
+## Acceptance evidence review
+
+Reviewed `main` at `2d6d82b` and existing results; no tests were rerun for this review.
+
+| Criterion | Evidence |
+| --- | --- |
+| Cumulative bounds and bounded queues | The [original software audit](https://github.com/markdlabrecque/convoke/issues/27) and [regression matrix](slice-4-29-verification.md) cover PCM and frame caps, played-buffer accounting, overflow, and socket backpressure. The latest applicable [Linux](https://github.com/markdlabrecque/convoke/actions/runs/44247366572), [Mac server](https://github.com/markdlabrecque/convoke/actions/runs/44247366630), and [Apple](https://github.com/markdlabrecque/convoke/actions/runs/44245642212) CI runs passed. |
+| Real upstream cancellation | The [passing Mac gate](development.md#passing-result-after-peer-observation-correction) observed actual Kokoro HTTP peer closure during reads, stalled/failed writes, disconnect and deadline. The earlier failure was in the peer's ability to observe closure, not evidence of a production cancellation defect. |
+| Real iOS playback adapter stops and drains | The [recorded opt-in iOS simulator rerun](https://github.com/markdlabrecque/convoke/pull/90) at `ef74132` passed all three tests (iPhone 17 simulator, iOS 27.2 `24B8117`). The tests exercise actual engine drain, explicit stop cancelling a pending drain and allowing replacement playback, and adapter teardown after an injected interruption. The player, queue and runtime tests are unchanged from that revision. The injected interruption proves adapter wiring, not a real device interruption or route change. |
+| No partial success and no content logging | The [software audit](https://github.com/markdlabrecque/convoke/issues/27) records failed-stream/no-done coverage, validated completion plus player drain, and content-free streaming diagnostics. The [physical session](slice-4-30-device-session.md) separately records the scope of its privacy check. |
+
+This satisfies the streaming robustness ticket's software and runtime criteria, not full physical acceptance. The owner closed [Slice 4](https://github.com/markdlabrecque/convoke/issues/25) with exceptions: real interruption and route changes are unverified on a physical iPhone, and physical retests of the [merged failure-message fix](https://github.com/markdlabrecque/convoke/issues/85) were waived, not passed.
 
 ## Bounds and cancellation
 

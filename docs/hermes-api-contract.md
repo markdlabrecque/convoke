@@ -1,5 +1,7 @@
 # Installed Hermes contract: evidence and blocked integration
 
+**Deferred:** Both the basic and native Hermes integration are on hold. The current priority is [finishing the server and iOS app against the existing OpenAI-compatible endpoint](development.md#current-priority-finish-the-server-and-ios-app). The contract, recommendations and unresolved gates below are retained for reference if Hermes work resumes; they are not prerequisites for the current work.
+
 Evidence dates: initial inspection 2026-11-16; source-only follow-up and coordinator-supplied durable reconciliation 2026-11-17. Tracks [issue 62](https://github.com/markdlabrecque/convoke/issues/62), under [epic 61](https://github.com/markdlabrecque/convoke/issues/61).
 
 **Disposition: H0 is NOT accepted. Runtime dependants remain gated.** This document can merge as accurate evidence without completing issue 62. No Hermes backend, phone approval, memory setup, or safe remote-stop implementation is enabled by this change.

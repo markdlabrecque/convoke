@@ -10,6 +10,8 @@
 
 The [development guide](development.md#physical-checklist-and-results) contains the consolidated physical table. Historical Linux, Mac and CI results remain at their original revisions. This session does not retroactively pass failed or unavailable checks.
 
+**Later disposition:** [Slice 4](https://github.com/markdlabrecque/convoke/issues/25) was closed at the owner's request with exceptions. Real interruption and route changes remain unverified. The failure-message fix shipped in [#85](https://github.com/markdlabrecque/convoke/issues/85), but the physical server-loss and Kokoro-loss retests were waived, not passed. The original results below are unchanged.
+
 ## Environment and provenance
 
 | Field | Session value / evidence |
