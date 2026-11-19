@@ -128,7 +128,7 @@ public final class SessionController: ObservableObject {
         case .disconnected: return "Disconnected"
         case .connecting: return "Connecting"
         case .ready: return isConversationActive ? "Starting to listen" : "Connected"
-        case .recording: return isPreparing ? "Preparing speech recognition" : (isFinalizing ? "Finishing" : "Listening")
+        case .recording: return isPreparing ? "Preparing speech recognition" : (isFinalizing ? "Finishing speech recognition" : "Listening")
         case .waiting: return "Waiting for reply"
         case .playing: return "Playing reply"
         }

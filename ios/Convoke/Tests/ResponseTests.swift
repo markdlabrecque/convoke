@@ -221,6 +221,7 @@ final class ResponseLifecycleTests: XCTestCase {
         transport.push(.string(#"{"type":"agent.done","chunks":2}"#))
         await milestone("validated EOF waiting for final drain") { self.player.pending != nil }
         XCTAssertEqual(session.state, .playing, "Still playing until the last chunk has played")
+        XCTAssertEqual(session.statusText, "Playing reply")
         XCTAssertEqual(speech.starts, 1)
         player.finish()
         await waitFor(.recording)
